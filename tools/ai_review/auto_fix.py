@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
-from .common import REPO_ROOT, ensure_parent, main_cli_error, read_json, short_exc, write_json, write_summary
+from .common import REPO_ROOT, ensure_parent, main_cli_error, read_json, write_json, write_summary
 from .llm import model_for, request_text
 from .prompts import FIXER_SYSTEM, build_fix_prompt
 from .review_data import should_review
@@ -56,6 +57,44 @@ def _normalize_changes(changes: list[dict], allowed_paths: set[str]) -> list[dic
         seen.add(path)
         normalized.append({"path": path, "content": content})
     return normalized
+
+
+def _looks_placeholder_summary(summary: str) -> bool:
+    normalized = (summary or "").strip().lower()
+    if not normalized:
+        return True
+    return normalized in {"一句中文总结", "自动修复已执行。", "auto fix applied"}
+
+
+def _heuristic_secret_fix(file_snapshots: list[dict], report_text: str) -> tuple[str, list[dict]]:
+    markers = ["硬编码", "api 密钥", "api key", "hardcoded", "secret", "token", "password"]
+    if not any(marker.lower() in report_text.lower() for marker in markers):
+        return "", []
+
+    assignment_pattern = re.compile(
+        r'^(?P<indent>\s*)(?P<name>[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD))\s*=\s*[\'"](?P<value>[^\'"]+)[\'"]\s*$',
+        re.MULTILINE,
+    )
+    import_os_pattern = re.compile(r"^\s*import os\s*$", re.MULTILINE)
+
+    changes = []
+    for item in file_snapshots:
+        original = item["content"]
+        match = assignment_pattern.search(original)
+        if not match:
+            continue
+
+        name = match.group("name")
+        replacement = f'{match.group("indent")}{name} = os.environ.get("{name}", "")'
+        updated = assignment_pattern.sub(replacement, original, count=1)
+        if not import_os_pattern.search(updated):
+            updated = "import os\n\n" + updated
+        if updated != original:
+            changes.append({"path": item["path"], "content": updated})
+
+    if not changes:
+        return "", []
+    return "已通过兜底规则将硬编码敏感信息改为环境变量读取。", changes
 
 
 def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_output: str | None) -> int:
@@ -110,13 +149,23 @@ def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_o
     model = model_for("AI_REVIEW_MODEL", DEFAULT_MODEL)
     raw = request_text(FIXER_SYSTEM, build_fix_prompt(payload, report_text, file_snapshots), model, temperature=0.1)
     parsed = _extract_json_blob(raw)
+    summary = str(parsed.get("summary") or "").strip()
     changes = _normalize_changes(parsed.get("changes") or [], allowed_paths)
+
+    if not changes:
+        fallback_summary, fallback_changes = _heuristic_secret_fix(file_snapshots, report_text)
+        if fallback_changes:
+            changes = fallback_changes
+            if _looks_placeholder_summary(summary):
+                summary = fallback_summary
 
     for item in changes:
         target = REPO_ROOT / item["path"]
         target.write_text(item["content"], encoding="utf-8")
 
-    summary = str(parsed.get("summary") or "").strip() or "自动修复已执行。"
+    if _looks_placeholder_summary(summary):
+        summary = "自动修复已执行。"
+
     result = {
         "ok": True,
         "changed": bool(changes),
@@ -127,7 +176,11 @@ def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_o
     write_json(metadata_output, result)
     if summary_output:
         ensure_parent(summary_output)
-        body = summary + ("\n\n修改文件：\n" + "\n".join(f"- {item['path']}" for item in changes) if changes else "\n\n未生成文件修改。")
+        body = summary + (
+            "\n\n修改文件：\n" + "\n".join(f"- {item['path']}" for item in changes)
+            if changes
+            else "\n\n未生成文件修改。"
+        )
         Path(summary_output).write_text(body.rstrip() + "\n", encoding="utf-8")
     write_summary(
         "## AI 自动修复\n\n"
