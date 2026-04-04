@@ -11,7 +11,7 @@ from pathlib import Path
 from .common import REPO_ROOT, ensure_parent, main_cli_error, read_json, write_json, write_summary
 from .llm import model_for, request_text
 from .prompts import FIXER_SYSTEM, build_fix_prompt
-from .review_data import should_review
+from .review_data import should_auto_fix
 
 
 DEFAULT_MODEL = "MiniMax-M2.5"
@@ -50,7 +50,7 @@ def _normalize_changes(changes: list[dict], allowed_paths: set[str]) -> list[dic
             continue
         if path not in allowed_paths:
             continue
-        if not should_review(path):
+        if not should_auto_fix(path):
             continue
         if not isinstance(content, str):
             continue
@@ -80,13 +80,16 @@ def _heuristic_secret_fix(file_snapshots: list[dict], report_text: str) -> tuple
     changes = []
     for item in file_snapshots:
         original = item["content"]
-        match = assignment_pattern.search(original)
-        if not match:
+        matches = list(assignment_pattern.finditer(original))
+        if not matches:
             continue
 
-        name = match.group("name")
-        replacement = f'{match.group("indent")}{name} = os.environ.get("{name}", "")'
-        updated = assignment_pattern.sub(replacement, original, count=1)
+        def replace_secret(match: re.Match[str]) -> str:
+            name = match.group("name")
+            indent = match.group("indent")
+            return f'{indent}{name} = os.environ.get("{name}", "")'
+
+        updated = assignment_pattern.sub(replace_secret, original)
         if not import_os_pattern.search(updated):
             updated = "import os\n\n" + updated
         if updated != original:
@@ -129,6 +132,8 @@ def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_o
             continue
         content = full_path.read_text(encoding="utf-8", errors="replace")
         file_snapshots.append({"path": normalized, "content": content})
+        if not should_auto_fix(normalized):
+            continue
         allowed_paths.add(normalized)
 
     if not file_snapshots:
