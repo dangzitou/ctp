@@ -45,3 +45,5 @@ docker_ctp/redis-data/
 # Config with secrets
 *.local.yml
 .env
+!.env.maclinux
+!.env.windows

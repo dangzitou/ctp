@@ -1,60 +1,134 @@
-# CTP Futures Data Capture System
+# CTP 期货数据抓取系统
 
 全量期货实时行情数据抓取系统，支持 SimNow CTP 协议。
+
+**支持交易所:** SHFE | DCE | CZCE | CFFEX | INE (共 137+ 合约)
 
 ## 系统架构
 
 ```
-SimNow CTP → Seed → Kafka → Dashboard (Spring Boot) → Redis + MySQL → 浏览器
-                     ↓
-              md_server.py (TCP中间件)
+SimNow CTP → Seed → Kafka → Dashboard → Redis + MySQL → 浏览器
 ```
 
-## 核心组件
+## 快速启动 (Mac/Linux)
 
-| 组件 | 目录 | 说明 |
-|------|------|------|
-| **Docker 完整系统** | `docker_ctp/` | Kafka + Redis + MySQL + Dashboard |
-| **Python Seed** | `docker_ctp/seed/` | 连接 SimNow CTP，推送到 Kafka |
-| **Java Dashboard** | `docker_ctp/dashboard/` | Spring Boot + Kafka Consumer + WebSocket |
-| **Python md_server** | `runtime/` | CTP TCP 中间件（Flask + 纯 TCP） |
-| **Java CTP 客户端** | `java_ctp_md/` | Maven 项目连接 md_server |
-| **Java Standalone** | `java_ctp_md_standalone/` | 可执行 JAR 版本 |
+### 1. 克隆项目
 
-## 快速启动
+```bash
+git clone https://github.com/dangzitou/ctp.git
+cd ctp
+```
 
-### 1. 启动 Docker 基础服务
+### 2. 一键启动
 
 ```bash
 cd docker_ctp
-docker-compose up -d kafka mysql redis
+
+# 启动 Docker 服务
+docker-compose up -d
+
+# 等待 30 秒
+sleep 30
+
+# 编译并启动 Dashboard
+cd dashboard
+mvn clean package -DskipTests
+java -jar target/ctp-dashboard.jar &
+
+# 返回上级目录
+cd ..
 ```
 
-### 2. 启动 Dashboard
-
-```bash
-cd docker_ctp/dashboard
-mvn package -DskipTests
-java -jar target/ctp-dashboard.jar \
-  --spring.kafka.bootstrap-servers=localhost:9094 \
-  --spring.data.redis.host=localhost \
-  --spring.data.redis.port=6380 \
-  --spring.datasource.url=jdbc:mysql://localhost:3307/ctp_futures
-```
-
-### 3. 启动 Seed（Windows）
+### 3. 启动 Seed (接收行情)
 
 ```bash
 cd docker_ctp/seed
-pip install kafka-python
+pip3 install kafka-python
+python3 ctp_seed.py
+```
+
+### 4. 访问
+
+- Dashboard: http://localhost:8080/dashboard
+- API: http://localhost:8080/api/stats
+
+## Mac/Linux 详细安装步骤
+
+### 安装依赖
+
+```bash
+# Docker Desktop
+# https://www.docker.com/products/docker-desktop
+
+# Java 17
+brew install openjdk@17
+
+# Maven
+brew install maven
+
+# Python 依赖
+pip3 install kafka-python flask
+```
+
+### 启动顺序
+
+```bash
+# 1. 启动 Docker 服务
+cd docker_ctp
+docker-compose up -d
+
+# 2. 等待服务就绪
+sleep 30
+
+# 3. 编译 Dashboard
+cd dashboard
+mvn clean package -DskipTests
+
+# 4. 启动 Dashboard (后台)
+java -jar target/ctp-dashboard.jar &
+
+# 5. 启动 Seed
+cd ../seed
+python3 ctp_seed.py
+```
+
+## Windows 启动
+
+```bash
+cd docker_ctp
+
+# Windows 端口配置 (已自动选择)
+docker-compose up -d
+
+# 启动 Dashboard
+cd dashboard
+java -jar target/ctp-dashboard.jar ^
+  --spring.kafka.bootstrap-servers=localhost:9094 ^
+  --spring.data.redis.host=localhost ^
+  --spring.data.redis.port=6380 ^
+  --spring.datasource.url=jdbc:mysql://localhost:3307/ctp_futures ^
+  --spring.datasource.username=ctpuser ^
+  --spring.datasource.password=ctp123456
+
+# 启动 Seed
+cd ../seed
 python ctp_seed.py
 ```
 
-### 4. 访问 Dashboard
+## 端口配置
 
-- Dashboard: http://localhost:8080/dashboard
-- WebSocket: ws://localhost:8080/ws/ticks
-- API: http://localhost:8080/api/instruments
+| 服务 | Mac/Linux | Windows | 说明 |
+|------|-----------|---------|------|
+| Kafka | 9092 | 9094 | Kafka broker |
+| MySQL | 3306 | 3307 | MySQL 数据库 |
+| Redis | 6379 | 6380 | Redis 缓存 |
+| Dashboard | 8080 | 8080 | Web 服务 |
+
+**Mac/Linux 用户**: 使用 `.env.maclinux` 配置
+```bash
+cp .env.maclinux .env
+docker-compose up -d
+```
 
 ## API 接口
 
@@ -65,62 +139,73 @@ python ctp_seed.py
 | `GET /api/kline/{instrumentId}` | K 线数据（1 分钟） |
 | `GET /api/stats` | 系统状态 |
 
-## 数据流向
+## 停止服务
 
-1. **SimNow CTP** (`tcp://182.254.243.31:40011`) - 免费 SimNow 行情
-2. **ctp_seed.py** - 连接 SimNow，订阅全部合约，推送 JSON 到 Kafka
-3. **Kafka** (`ctp-ticks` topic) - 消息队列
-4. **Dashboard** - 消费 Kafka，存储 Redis + MySQL，WebSocket 推送
-5. **浏览器** - WebSocket 接收实时数据，ECharts 渲染 K 线
+```bash
+# 停止 Dashboard
+pkill -f ctp-dashboard
 
-## 支持交易所
-
-- **SHFE** (上海期货) - cu, al, zn, pb, ni, sn, ss, au, ag, ru, bu, rb, hc, i, j, jm
-- **DCE** (大连商品) - m, y, c, cs, p, a, b, l, pp, v, eb, eg, pg
-- **CZCE** (郑州商品) - ma, ta, fg, pf, rm, sr, cf, cy, oi, wh, pm
-- **CFFEX** (中金所) - if, ih, ic, im, tf, ts, t
-- **INE** (上期能源) - sc, bc
-
-## 技术栈
-
-- **Kafka**: apache/kafka:latest (KRaft 模式)
-- **Redis**: redis:7-alpine
-- **MySQL**: mysql:8.0
-- **Dashboard**: Spring Boot 3.2.3 + Java 21
-- **Seed**: Python 3.8 + kafka-python
+# 停止 Docker
+docker-compose down
+```
 
 ## 目录结构
 
 ```
 ctp/
 ├── docker_ctp/
-│   ├── docker-compose.yml      # Docker 编排
-│   ├── sql/init.sql            # MySQL 初始化
-│   ├── seed/                   # Python Seed
-│   │   ├── ctp_seed.py
-│   │   ├── requirements.txt
-│   │   └── Dockerfile
-│   └── dashboard/              # Spring Boot Dashboard
-│       ├── pom.xml
-│       └── src/
-├── runtime/
-│   ├── dashboard/              # Flask Web Dashboard
-│   ├── md_server.py            # TCP 中间件
-│   └── md_simnow/              # CTP Python API
-├── java_ctp_md/                # Java Maven 项目
-└── java_ctp_md_standalone/     # Java 可执行版本
+│   ├── docker-compose.yml   # Docker 编排
+│   ├── .env                 # 端口配置
+│   ├── .env.maclinux       # Mac/Linux 配置
+│   ├── .env.windows        # Windows 配置
+│   ├── start.sh            # Mac/Linux 启动脚本
+│   ├── sql/init.sql        # MySQL 初始化
+│   ├── seed/               # Python Seed
+│   └── dashboard/           # Spring Boot Dashboard
+├── runtime/                # Python 版本
+└── docs/
+    └── SETUP_GUIDE.md      # 详细部署指南
 ```
 
-## 配置说明
+## 技术栈
 
-### 环境变量
+- **Kafka**: apache/kafka:latest (KRaft 模式)
+- **Redis**: redis:7-alpine
+- **MySQL**: mysql:8.0
+- **Dashboard**: Spring Boot 3.2.3 + Java 17
+- **Seed**: Python 3.8 + kafka-python
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CTP_FRONT` | tcp://182.254.243.31:40011 | SimNow 行情服务器 |
-| `KAFKA_BOOTSTRAP_SERVERS` | localhost:9094 | Kafka 地址 |
-| `KAFKA_TOPIC` | ctp-ticks | Kafka Topic |
+## SimNow 说明
 
-## License
+本系统使用 SimNow 仿真交易系统（免费，无需注册）：
 
-MIT
+| 参数 | 值 |
+|------|------|
+| 行情服务器 | `tcp://182.254.243.31:40011` |
+| 交易服务器 | `tcp://182.254.243.31:40001` |
+| BrokerID | `9999` |
+
+**注意**: 这是仿真环境，不是真实交易。
+
+## 故障排查
+
+### Dashboard 连接 Redis 失败
+```bash
+# 检查 Redis 端口
+docker ps | grep redis
+# Mac: 0.0.0.0:6379->6379/tcp
+# Windows: 0.0.0.0:6380->6379/tcp
+```
+
+### Dashboard 连接 MySQL 失败
+```bash
+# 检查 MySQL 端口
+docker ps | grep mysql
+# Mac: 0.0.0.0:3306->3306/tcp
+# Windows: 0.0.0.0:3307->3306/tcp
+```
+
+### Kafka Topic 不存在
+```bash
+docker exec ctp-kafka bash -c '/opt/kafka/bin/kafka-topics.sh --create --topic ctp-ticks --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1'
+```
