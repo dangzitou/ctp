@@ -1,6 +1,7 @@
 """Smoke test file for AI auto-fix workflow."""
 
 API_KEY = "sk-test-hardcoded-demo-key"
+SECRET_TOKEN = "demo-hardcoded-token"
 
 
 def load_api_key() -> str:
