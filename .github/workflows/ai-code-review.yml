@@ -1,0 +1,55 @@
+name: AI Code Review
+
+on:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+    paths-ignore:
+      - "openctp/**"
+      - "ctpapi_python_6.7.11/**"
+      - "tts_6.7.11/**"
+      - "tap_6.7.2/**"
+      - "*.zip"
+      - "*.dll"
+      - "*.pyd"
+      - "*.jar"
+      - "*.class"
+      - "*.con"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ai-code-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review-push:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install review dependencies
+        run: python -m pip install --upgrade pip openai
+
+      - name: Run AI review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.AI_REVIEW_MODEL }}
+          AI_REVIEW_MAX_FILES: ${{ vars.AI_REVIEW_MAX_FILES }}
+          AI_REVIEW_MAX_PATCH_CHARS: ${{ vars.AI_REVIEW_MAX_PATCH_CHARS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/ai_review/review_push.py

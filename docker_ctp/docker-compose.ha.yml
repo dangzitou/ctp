@@ -1,0 +1,148 @@
+services:
+  kafka:
+    image: apache/kafka:latest
+    environment:
+      - KAFKA_PROCESS_ROLES=controller,broker
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=CLIENT
+      - KAFKA_LISTENERS=CONTROLLER://:9093,CLIENT://:9092,EXTERNAL://:9094
+      - KAFKA_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT}
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CONTROLLER_PORT=9093
+      - KAFKA_NODE_ID=1
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_LOG_DIRS=/tmp/kraft-combined-logs
+      - ALLOW_PLAINTEXT_LISTENER=true
+    ports:
+      - "${KAFKA_CLIENT_PORT}:9092"
+      - "${KAFKA_EXTERNAL_PORT}:9094"
+    networks: [ctp-ha]
+    healthcheck:
+      test: ["CMD-SHELL", "bash /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=ctp123456
+      - MYSQL_DATABASE=ctp_futures
+      - MYSQL_USER=ctpuser
+      - MYSQL_PASSWORD=ctp123456
+    ports:
+      - "${MYSQL_HOST_PORT}:3306"
+    volumes:
+      - mysql-ha-data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks: [ctp-ha]
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_HOST_PORT}:6379"
+    volumes:
+      - redis-ha-data:/data
+    networks: [ctp-ha]
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  seed:
+    build:
+      context: ./seed
+      dockerfile: Dockerfile.ha
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: ctp-ticks
+      SEED_MODE: ${SEED_MODE}
+      MD_SERVER_HOST: ${MD_SERVER_HOST}
+      MD_SERVER_PORT: ${MD_SERVER_PORT}
+      HEALTH_PORT: 9101
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ctp-ha]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: ./worker
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: ctp-ticks
+      CONSUMER_GROUP: ctp-worker
+      HEALTH_PORT: 9102
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ctp-ha]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9102/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  admin:
+    build:
+      context: ./admin
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8081
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ctp-ha]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  admin-lb:
+    image: haproxy:2.9-alpine
+    depends_on:
+      admin:
+        condition: service_healthy
+    ports:
+      - "${ADMIN_PORT}:8081"
+    volumes:
+      - ./admin-lb/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    restart: unless-stopped
+    networks: [ctp-ha]
+
+networks:
+  ctp-ha:
+    driver: bridge
+
+volumes:
+  mysql-ha-data:
+  redis-ha-data:

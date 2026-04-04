@@ -37,6 +37,10 @@ Thumbs.db
 # Logs
 *.log
 logs/
+docker_ctp/*/*.out.log
+docker_ctp/*/*.err.log
+runtime/*/*.out.log
+runtime/*/*.err.log
 
 # Docker volumes
 docker_ctp/mysql-data/
