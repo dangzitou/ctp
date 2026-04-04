@@ -13,11 +13,14 @@ import socket
 import threading
 import selectors
 import os
+from pathlib import Path
 
 sys.path.insert(0, r"E:\Develop\projects\ctp\runtime\md_simnow")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import thostmduserapi as mdapi
+from runtime.front_config import resolve_ctp_connection
 
-FRONT = "tcp://182.254.243.31:40011"
+DEFAULT_FRONT = "tcp://182.254.243.31:40011"
 DEFAULT_PORT = 19842
 
 # Build instrument list
@@ -92,8 +95,9 @@ def build_instrument_list():
 class MDServer:
     """TCP server broadcasting CTP ticks to subscribers."""
 
-    def __init__(self, port):
+    def __init__(self, port, settings):
         self.port = port
+        self.settings = settings
         self.sock = None
         self.clients = set()
         self.running = False
@@ -141,11 +145,36 @@ class MDServer:
 
             def OnFrontConnected(s):
                 print("[CTP] Front Connected")
+                auth_fn = getattr(self.ctp_api, "ReqAuthenticate", None)
+                if self.settings.requires_auth and callable(auth_fn):
+                    req = mdapi.CThostFtdcReqAuthenticateField()
+                    req.BrokerID = self.settings.broker_id
+                    req.UserID = self.settings.user_id
+                    req.AppID = self.settings.app_id
+                    req.AuthCode = self.settings.auth_code
+                    req.UserProductInfo = self.settings.user_product_info
+                    auth_fn(req, 0)
+                    print("[CTP] Authenticate request sent")
+                    return
                 req = mdapi.CThostFtdcReqUserLoginField()
+                req.BrokerID = self.settings.broker_id
+                req.UserID = self.settings.user_id
+                req.Password = self.settings.password
                 self.ctp_api.ReqUserLogin(req, 0)
 
             def OnFrontDisconnected(s, n):
                 print(f"[CTP] Disconnected n={n}")
+
+            def OnRspAuthenticate(s, p, info, req, last):
+                if info and info.ErrorID != 0:
+                    print(f"[CTP] Authenticate failed: {info.ErrorID} {info.ErrorMsg}")
+                    return
+                print("[CTP] Authenticate OK")
+                login = mdapi.CThostFtdcReqUserLoginField()
+                login.BrokerID = self.settings.broker_id
+                login.UserID = self.settings.user_id
+                login.Password = self.settings.password
+                self.ctp_api.ReqUserLogin(login, 1)
 
             def OnRspUserLogin(s, p, info, req, last):
                 if info and info.ErrorID != 0:
@@ -188,7 +217,7 @@ class MDServer:
 
         self.ctp_api = mdapi.CThostFtdcMdApi.CreateFtdcMdApi()
         self.ctp_spi = Spi(self)
-        self.ctp_api.RegisterFront(FRONT)
+        self.ctp_api.RegisterFront(self.settings.front)
         self.ctp_api.RegisterSpi(self.ctp_spi)
         self.ctp_api.Init()
         print("[CTP] API Init complete")
@@ -225,10 +254,16 @@ class MDServer:
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    settings = resolve_ctp_connection(DEFAULT_FRONT)
     print(f"[MDServer] CTP Market Data TCP Server v1.0")
-    print(f"[MDServer] Front: {FRONT}")
+    print(f"[MDServer] Front: {settings.front} ({settings.front_source})")
+    if len(settings.front_candidates) > 1:
+        print(f"[MDServer] Front pool: {', '.join(settings.front_candidates)}")
+    print(f"[MDServer] Auth source: {settings.auth_source}")
+    if settings.redis_error:
+        print(f"[MDServer] Redis config warning: {settings.redis_error}")
     print(f"[MDServer] Port: {port}")
-    server = MDServer(port)
+    server = MDServer(port, settings)
     try:
         server.start()
     except KeyboardInterrupt:

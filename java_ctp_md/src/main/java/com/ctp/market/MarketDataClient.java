@@ -312,6 +312,27 @@ public class MarketDataClient extends CThostFtdcMdSpi {
         String instrumentList = "cu2605,al2605,zn2605,ma2605,cf2605,if2606,sc2605";
 
         // Allow override via system properties or environment
+        String envFrontAddress = System.getenv("CTP_FRONT");
+        if (envFrontAddress != null && !envFrontAddress.isBlank()) {
+            frontAddress = envFrontAddress.trim();
+        }
+        String envBrokerId = System.getenv("CTP_BROKER_ID");
+        if (envBrokerId != null && !envBrokerId.isBlank()) {
+            brokerId = envBrokerId.trim();
+        }
+        String envUserId = System.getenv("CTP_USER_ID");
+        if (envUserId != null && !envUserId.isBlank()) {
+            userId = envUserId.trim();
+        }
+        String envPassword = System.getenv("CTP_PASSWORD");
+        if (envPassword != null && !envPassword.isBlank()) {
+            password = envPassword.trim();
+        }
+        String envInstrumentList = System.getenv("CTP_INSTRUMENT_LIST");
+        if (envInstrumentList != null && !envInstrumentList.isBlank()) {
+            instrumentList = envInstrumentList.trim();
+        }
+
         frontAddress = System.getProperty("ctp.front.address", frontAddress);
         brokerId = System.getProperty("ctp.broker.id", brokerId);
         userId = System.getProperty("ctp.user.id", userId);

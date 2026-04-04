@@ -13,8 +13,12 @@ import os
 import time
 import json
 import threading
+from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from runtime.front_config import resolve_ctp_connection
 
 # Try to import CTP (Windows-only)
 CTP_AVAILABLE = False
@@ -38,7 +42,7 @@ except ImportError:
 # Config
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "ctp-ticks")
-CTP_FRONT = os.environ.get("CTP_FRONT", "tcp://182.254.243.31:40011")
+DEFAULT_CTP_FRONT = "tcp://182.254.243.31:40011"
 
 
 # Build instrument list (same as scan_contracts.py)
@@ -169,17 +173,43 @@ class CTPToKafka:
             self.kafka = None
 
     def run_ctp(self):
+        settings = resolve_ctp_connection(DEFAULT_CTP_FRONT)
         class Spi(mdapi.CThostFtdcMdSpi):
             def __init__(s):
                 super().__init__()
 
             def OnFrontConnected(s):
                 print("[CTP] Connected")
+                auth_fn = getattr(s.api, "ReqAuthenticate", None)
+                if settings.requires_auth and callable(auth_fn):
+                    req = mdapi.CThostFtdcReqAuthenticateField()
+                    req.BrokerID = settings.broker_id
+                    req.UserID = settings.user_id
+                    req.AppID = settings.app_id
+                    req.AuthCode = settings.auth_code
+                    req.UserProductInfo = settings.user_product_info
+                    auth_fn(req, 0)
+                    print("[CTP] Authenticate request sent")
+                    return
                 req = mdapi.CThostFtdcReqUserLoginField()
+                req.BrokerID = settings.broker_id
+                req.UserID = settings.user_id
+                req.Password = settings.password
                 s.api.ReqUserLogin(req, 0)
 
             def OnFrontDisconnected(s, n):
                 print(f"[CTP] Disconnected n={n}")
+
+            def OnRspAuthenticate(s, p, info, req, last):
+                if info and info.ErrorID != 0:
+                    print(f"[CTP] Authenticate failed: {info.ErrorID} {info.ErrorMsg}")
+                    return
+                print("[CTP] Authenticate OK")
+                login = mdapi.CThostFtdcReqUserLoginField()
+                login.BrokerID = settings.broker_id
+                login.UserID = settings.user_id
+                login.Password = settings.password
+                s.api.ReqUserLogin(login, 1)
 
             def OnRspUserLogin(s, p, info, req, last):
                 if info and info.ErrorID != 0:
@@ -225,10 +255,15 @@ class CTPToKafka:
         api = mdapi.CThostFtdcMdApi.CreateFtdcMdApi()
         spi = Spi()
         spi.api = api
-        api.RegisterFront(CTP_FRONT)
+        api.RegisterFront(settings.front)
         api.RegisterSpi(spi)
         api.Init()
-        print(f"[CTP] API started, front={CTP_FRONT}")
+        print(f"[CTP] API started, front={settings.front} ({settings.front_source})")
+        if len(settings.front_candidates) > 1:
+            print(f"[CTP] Front pool: {', '.join(settings.front_candidates)}")
+        print(f"[CTP] Auth source: {settings.auth_source}")
+        if settings.redis_error:
+            print(f"[CTP] Redis config warning: {settings.redis_error}")
 
         try:
             while self.running:
@@ -251,9 +286,15 @@ class CTPToKafka:
 
 
 if __name__ == "__main__":
+    settings = resolve_ctp_connection(DEFAULT_CTP_FRONT)
     print("=" * 60)
     print("CTP Seed -> Kafka Publisher")
-    print(f"  CTP Front: {CTP_FRONT}")
+    print(f"  CTP Front: {settings.front} ({settings.front_source})")
+    if len(settings.front_candidates) > 1:
+        print(f"  Front pool: {', '.join(settings.front_candidates)}")
+    print(f"  Auth source: {settings.auth_source}")
+    if settings.redis_error:
+        print(f"  Redis config warning: {settings.redis_error}")
     print(f"  Kafka: {KAFKA_BOOTSTRAP}")
     print(f"  Topic: {KAFKA_TOPIC}")
     print("=" * 60)

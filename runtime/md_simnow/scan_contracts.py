@@ -1,10 +1,13 @@
 """扫描 SimNow 7x24 环境支持的合约列表"""
 import sys
 import time
+from pathlib import Path
 sys.path.insert(0, r"E:\Develop\projects\ctp\runtime\md_simnow")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import thostmduserapi as mdapi
+from runtime.front_config import resolve_ctp_connection
 
-FRONT = "tcp://182.254.243.31:40011"
+DEFAULT_FRONT = "tcp://182.254.243.31:40011"
 
 # 全品种合集（上海/大连/郑州/中金所主力+次主力）
 CONTRACTS = [
@@ -67,8 +70,9 @@ CONTRACTS = [
 
 
 class Scanner(mdapi.CThostFtdcMdSpi):
-    def __init__(self):
+    def __init__(self, settings):
         super().__init__()
+        self.settings = settings
         self.api = None
         self.success = []
         self.fail = []
@@ -77,14 +81,39 @@ class Scanner(mdapi.CThostFtdcMdSpi):
 
     def run(self):
         self.api = mdapi.CThostFtdcMdApi.CreateFtdcMdApi()
-        self.api.RegisterFront(FRONT)
+        self.api.RegisterFront(self.settings.front)
         self.api.RegisterSpi(self)
         self.api.Init()
 
     def OnFrontConnected(self):
         print("Front Connected", flush=True)
+        auth_fn = getattr(self.api, "ReqAuthenticate", None)
+        if self.settings.requires_auth and callable(auth_fn):
+            req = mdapi.CThostFtdcReqAuthenticateField()
+            req.BrokerID = self.settings.broker_id
+            req.UserID = self.settings.user_id
+            req.AppID = self.settings.app_id
+            req.AuthCode = self.settings.auth_code
+            req.UserProductInfo = self.settings.user_product_info
+            auth_fn(req, 0)
+            print("Authenticate request sent", flush=True)
+            return
         req = mdapi.CThostFtdcReqUserLoginField()
+        req.BrokerID = self.settings.broker_id
+        req.UserID = self.settings.user_id
+        req.Password = self.settings.password
         self.api.ReqUserLogin(req, 0)
+
+    def OnRspAuthenticate(self, pRspAuthenticateField, pRspInfo, nRequestID, bIsLast):
+        if pRspInfo and pRspInfo.ErrorID != 0:
+            print(f"Authenticate failed: {pRspInfo.ErrorID} {pRspInfo.ErrorMsg}", flush=True)
+            return
+        print("Authenticate OK", flush=True)
+        req = mdapi.CThostFtdcReqUserLoginField()
+        req.BrokerID = self.settings.broker_id
+        req.UserID = self.settings.user_id
+        req.Password = self.settings.password
+        self.api.ReqUserLogin(req, 1)
 
     def OnFrontDisconnected(self, nReason):
         print(f"Disconnected nReason={nReason}", flush=True)
@@ -137,10 +166,16 @@ class Scanner(mdapi.CThostFtdcMdSpi):
 
 
 def main():
+    settings = resolve_ctp_connection(DEFAULT_FRONT)
     print(f"API: {mdapi.CThostFtdcMdApi.GetApiVersion()}", flush=True)
-    print(f"Front: {FRONT}", flush=True)
+    print(f"Front: {settings.front} ({settings.front_source})", flush=True)
+    if len(settings.front_candidates) > 1:
+        print(f"Front pool: {', '.join(settings.front_candidates)}", flush=True)
+    print(f"Auth source: {settings.auth_source}", flush=True)
+    if settings.redis_error:
+        print(f"Redis config warning: {settings.redis_error}", flush=True)
     print(f"Total contracts to scan: {len(CONTRACTS)}\n", flush=True)
-    scanner = Scanner()
+    scanner = Scanner(settings)
     scanner.run()
     # wait up to 30s for scan to finish
     start = time.time()

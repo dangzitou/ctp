@@ -51,6 +51,34 @@ MD_SERVER_PORT=19842
 
 This avoids requiring Windows-only CTP DLLs on the Mac itself.
 
+### Runtime interface switching
+
+Real-data entrypoints support switchable front pools and decoupled auth:
+
+- front set in Redis: `ctp_collect_url`
+- auth hash in Redis: `ctp_collect_auth`
+
+Resolution order:
+
+1. env overrides such as `CTP_FRONT`, `CTP_BROKER_ID`, `CTP_USER_ID`, `CTP_PASSWORD`, `CTP_APP_ID`, `CTP_AUTH_CODE`
+2. Redis control-plane keys
+3. built-in defaults
+
+Typical operator flow:
+
+```bash
+redis-cli -p 16380 SADD ctp_collect_url tcp://101.230.178.179:53313
+redis-cli -p 16380 SADD ctp_collect_url tcp://101.230.178.178:53313
+redis-cli -p 16380 HSET ctp_collect_auth broker_id your_broker_id
+redis-cli -p 16380 HSET ctp_collect_auth user_id your_user_id
+redis-cli -p 16380 HSET ctp_collect_auth password 'your_password'
+redis-cli -p 16380 HSET ctp_collect_auth app_id your_app_id
+redis-cli -p 16380 HSET ctp_collect_auth auth_code 'your_auth_code'
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local restart seed
+```
+
+Switching is restart-based. Existing processes keep their selected front until restarted.
+
 ## High Availability Model
 
 - `seed`: active-standby via Redis leader key

@@ -8,12 +8,15 @@ import json
 import subprocess
 import threading
 import os
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from runtime.front_config import resolve_ctp_connection
 
 # CTP API path
 SIMNOW_MD_PATH = r"E:/Develop/projects/ctp/runtime/md_simnow"
 
-# Front address
-FRONT = "tcp://182.254.243.31:40011"
+DEFAULT_FRONT = "tcp://182.254.243.31:40011"
 
 # Build instrument list
 def build_instrument_list():
@@ -106,6 +109,13 @@ class CTPBridge:
 
     def _run(self):
         """Run CTP in subprocess."""
+        settings = resolve_ctp_connection(DEFAULT_FRONT)
+        print(f"[Bridge] Front: {settings.front} ({settings.front_source})", flush=True)
+        if len(settings.front_candidates) > 1:
+            print(f"[Bridge] Front pool: {', '.join(settings.front_candidates)}", flush=True)
+        print(f"[Bridge] Auth source: {settings.auth_source}", flush=True)
+        if settings.redis_error:
+            print(f"[Bridge] Redis config warning: {settings.redis_error}", flush=True)
         # Build a script that outputs JSON ticks
         script = f'''
 import sys
@@ -114,7 +124,13 @@ import thostmduserapi as mdapi
 import time
 import json
 
-FRONT = "{FRONT}"
+FRONT = "{settings.front}"
+BROKER_ID = "{settings.broker_id}"
+USER_ID = "{settings.user_id}"
+PASSWORD = "{settings.password}"
+APP_ID = "{settings.app_id}"
+AUTH_CODE = "{settings.auth_code}"
+USER_PRODUCT_INFO = "{settings.user_product_info}"
 
 class Spi(mdapi.CThostFtdcMdSpi):
     def __init__(self, api):
@@ -123,11 +139,38 @@ class Spi(mdapi.CThostFtdcMdSpi):
         self.base_prices = {{}}
 
     def OnFrontConnected(self):
+        auth_fn = getattr(self.api, "ReqAuthenticate", None)
+        if APP_ID or AUTH_CODE:
+            if callable(auth_fn):
+                req = mdapi.CThostFtdcReqAuthenticateField()
+                req.BrokerID = BROKER_ID
+                req.UserID = USER_ID
+                req.AppID = APP_ID
+                req.AuthCode = AUTH_CODE
+                req.UserProductInfo = USER_PRODUCT_INFO
+                auth_fn(req, 0)
+                print("AUTH_SENT", flush=True)
+                return
+            print("AUTH_SKIPPED:NO_API_METHOD", flush=True)
         req = mdapi.CThostFtdcReqUserLoginField()
+        req.BrokerID = BROKER_ID
+        req.UserID = USER_ID
+        req.Password = PASSWORD
         self.api.ReqUserLogin(req, 0)
 
     def OnFrontDisconnected(self, n):
         pass
+
+    def OnRspAuthenticate(self, p, info, req, last):
+        if info and info.ErrorID != 0:
+            print(f"AUTH_FAILED: {{info.ErrorID}}", flush=True)
+            return
+        print("AUTH_OK", flush=True)
+        login = mdapi.CThostFtdcReqUserLoginField()
+        login.BrokerID = BROKER_ID
+        login.UserID = USER_ID
+        login.Password = PASSWORD
+        self.api.ReqUserLogin(login, 1)
 
     def OnRspUserLogin(self, p, info, req, last):
         if info and info.ErrorID != 0:
@@ -193,6 +236,8 @@ while True:
                 tick_data = json.loads(line[5:])
                 self._handle_tick(tick_data)
             elif line.startswith("LOGIN_OK:"):
+                print(f"[Bridge] {line}", flush=True)
+            elif line.startswith("AUTH_OK") or line.startswith("AUTH_SENT") or line.startswith("AUTH_FAILED:") or line.startswith("AUTH_SKIPPED:"):
                 print(f"[Bridge] {line}", flush=True)
             elif line.startswith("LOGIN_FAILED:"):
                 print(f"[Bridge] {line}", flush=True)

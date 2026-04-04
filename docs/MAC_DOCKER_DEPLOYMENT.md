@@ -7,6 +7,7 @@ It covers:
 1. Starting the Dockerized Java dashboard and HA services
 2. Seeing market data from either simulation or a Windows real-data relay
 3. Understanding the GitHub AI code-review and scheduled-audit workflows
+4. Switching market-data interfaces through Redis or environment variables
 
 ## 1. What You Need On The Mac
 
@@ -117,7 +118,75 @@ docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
 
 If the Mac can route to the Windows host, `seed` will relay real ticks into Kafka and the rest of the Docker stack will display them.
 
-## 7. Scaling And HA
+## 7. Switching Market Data Interfaces
+
+The project now supports decoupled switching for:
+
+1. front addresses
+2. account credentials
+3. optional company auth fields such as `app_id` and `auth_code`
+
+Runtime priority for fronts:
+
+1. `CTP_FRONT` or `CTP_FRONTS`
+2. Redis set `ctp_collect_url`
+3. built-in default
+
+Runtime priority for credentials and auth:
+
+1. `CTP_BROKER_ID`, `CTP_USER_ID`, `CTP_PASSWORD`, `CTP_APP_ID`, `CTP_AUTH_CODE`, `CTP_USER_PRODUCT_INFO`
+2. Redis hash `ctp_collect_auth`
+3. built-in default
+
+Recommended operator path:
+
+1. Use Redis as the shared control plane
+2. Keep one address in the set if you need deterministic routing
+3. Restart the affected process after the change
+
+If Redis is running inside the Mac Docker stack, use:
+
+```bash
+redis-cli -p 16380 DEL ctp_collect_url
+redis-cli -p 16380 SADD ctp_collect_url tcp://101.230.178.179:53313
+redis-cli -p 16380 SADD ctp_collect_url tcp://101.230.178.178:53313
+redis-cli -p 16380 SMEMBERS ctp_collect_url
+redis-cli -p 16380 HSET ctp_collect_auth broker_id your_broker_id
+redis-cli -p 16380 HSET ctp_collect_auth user_id your_user_id
+redis-cli -p 16380 HSET ctp_collect_auth password 'your_password'
+redis-cli -p 16380 HSET ctp_collect_auth app_id your_app_id
+redis-cli -p 16380 HSET ctp_collect_auth auth_code 'your_auth_code'
+redis-cli -p 16380 HSET ctp_collect_auth user_product_info company-md
+redis-cli -p 16380 HGETALL ctp_collect_auth
+```
+
+Then restart `seed`:
+
+```bash
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local restart seed
+```
+
+If you run the Windows relay and want it to obey the same Redis-controlled pool, point it at the Mac Redis:
+
+```powershell
+$env:REDIS_URL="redis://<mac-ip>:16380/0"
+python runtime\md_simnow\md_server.py 19842
+```
+
+If you need an immediate one-off override, use:
+
+```bash
+export CTP_FRONT=tcp://101.230.178.179:53313
+export CTP_BROKER_ID=your_broker_id
+export CTP_USER_ID=your_user_id
+export CTP_PASSWORD='your_password'
+export CTP_APP_ID=your_app_id
+export CTP_AUTH_CODE='your_auth_code'
+```
+
+See [DATA_INTERFACE_SWITCHING.md](/e:/Develop/projects/ctp/docs/DATA_INTERFACE_SWITCHING.md) for the full operating guide.
+
+## 8. Scaling And HA
 
 Example HA scaling on the Mac:
 
@@ -136,7 +205,7 @@ Behavior:
 - `admin` instances sit behind `admin-lb`
 - `dashboard` instances sit behind `dashboard-lb`
 
-## 8. Health Checks And Troubleshooting
+## 9. Health Checks And Troubleshooting
 
 Check running containers:
 
@@ -165,7 +234,7 @@ SEED_MODE=sim
 
 and restart the stack.
 
-## 9. Java Dashboard In Docker
+## 10. Java Dashboard In Docker
 
 The Java dashboard is built from:
 
@@ -183,7 +252,7 @@ Externally, use the load-balanced entrypoint:
 
 - `http://localhost:18080`
 
-## 10. GitHub AI Review And Audit
+## 11. GitHub AI Review And Audit
 
 These workflows already exist in the repository:
 
@@ -206,7 +275,7 @@ The workflows run on GitHub-hosted runners, not on your Mac.
 
 That means once the repo is cloned and you can push changes, your Mac does not need to run the review agents locally.
 
-## 11. GitHub Secrets And Variables
+## 12. GitHub Secrets And Variables
 
 For this repository, the review system expects:
 
@@ -221,7 +290,7 @@ Optional variables:
 
 The workflows use the MiniMax OpenAI-compatible endpoint internally.
 
-## 12. Recommended Daily Usage At Work
+## 13. Recommended Daily Usage At Work
 
 If you go back to the office and want the fastest path on a Mac:
 
@@ -232,9 +301,10 @@ If you go back to the office and want the fastest path on a Mac:
    - `http://localhost:18081`
    - `http://localhost:18080`
 5. If you need real data, point `SEED_MODE=tcp` to the Windows relay and restart
-6. Push code normally; GitHub Actions will run review and audit automatically
+6. If you need to switch CTP company fronts, update Redis `ctp_collect_url` and, if needed, `ctp_collect_auth`, then restart the affected process
+7. Push code normally; GitHub Actions will run review and audit automatically
 
-## 13. Useful Commands
+## 14. Useful Commands
 
 Start:
 
