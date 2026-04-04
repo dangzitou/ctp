@@ -1,56 +1,47 @@
-# Seed / Worker / Admin High-Availability Deployment
+# CTP HA Deployment
 
-This repository now includes a cross-platform HA stack built around three services:
+This repository includes a Docker-first deployment path intended for Mac/Linux operators.
 
-- `seed`: publishes ticks into Kafka
-- `worker`: consumes ticks from Kafka and materializes the latest market state into Redis
-- `admin`: management plane and read API for health, topology, and latest market data
+The high-availability stack now contains:
 
-The deployment entrypoint is:
+- `seed`: tick producer with Redis leader election
+- `worker`: Kafka consumer group worker
+- `admin`: management plane
+- `dashboard`: Java Spring dashboard service
+- `admin-lb`: HAProxy entrypoint for admin
+- `dashboard-lb`: HAProxy entrypoint for dashboard
+- `kafka`, `redis`, `mysql`: shared infrastructure
+
+The main entrypoint is:
 
 - `docker_ctp/docker-compose.ha.yml`
 
-## What Runs Where
+## Access Points
 
-### Default Mac/Linux mode
+With the default `docker_ctp/.env.ha` values:
 
-On a fresh Mac/Linux machine, the stack runs in `sim` mode by default.
-That means:
+- Admin UI and API: `http://localhost:18081`
+- Dashboard API/UI: `http://localhost:18080`
+- Redis: `localhost:16380`
+- MySQL: `localhost:13307`
+- Kafka: `localhost:19092` and `localhost:19094`
 
-- Kafka, Redis, and MySQL run in Docker
-- `seed` generates realistic demo ticks
-- `worker` processes those ticks
-- `admin` shows topology and market state
+## Data Modes
 
-This mode is fully cross-platform and requires only Docker.
+### Sim mode
 
-### Real-data mode on Mac/Linux
+This is the default and works cross-platform with Docker only.
 
-The official CTP DLLs in this repo are still Windows-oriented, so the recommended real-data path for Mac/Linux is:
+- `seed` generates realistic simulated futures ticks
+- `worker` consumes and materializes state
+- `dashboard` and `admin` expose the result
 
-1. Run `runtime/md_simnow/md_server.py` on a Windows host that has the CTP API available.
-2. Point the HA `seed` container at that TCP relay.
+### Real-data mode
 
-That gives you real data on another Mac/Linux machine without needing to run the CTP DLL locally.
+For real futures data on Mac/Linux, use a Windows relay:
 
-## Quick Start
-
-```bash
-cd docker_ctp
-cp .env.ha .env.ha.local
-docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
-```
-
-Open:
-
-- Admin UI: `http://localhost:18081`
-- Admin topology API: `http://localhost:18081/api/topology`
-- Latest instruments API: `http://localhost:18081/api/instruments`
-- Single instrument API: `http://localhost:18081/api/tick/cu2605`
-
-## Real Data Setup
-
-Edit `.env.ha.local`:
+1. Run `runtime/md_simnow/md_server.py` on a Windows machine with the CTP API available.
+2. Point the Docker `seed` service at that relay with:
 
 ```env
 SEED_MODE=tcp
@@ -58,109 +49,39 @@ MD_SERVER_HOST=<windows-host-or-ip>
 MD_SERVER_PORT=19842
 ```
 
-Then restart:
-
-```bash
-docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
-```
-
-### If Docker is running on Linux
-
-If the Windows relay is reachable by IP, set `MD_SERVER_HOST` to that IP directly.
-
-If you want to relay from the same host running Docker, the compose file already includes:
-
-```text
-host.docker.internal:host-gateway
-```
-
-so modern Docker on Linux/Mac can resolve that alias.
+This avoids requiring Windows-only CTP DLLs on the Mac itself.
 
 ## High Availability Model
 
-### Seed
+- `seed`: active-standby via Redis leader key
+- `worker`: active-active via Kafka consumer group
+- `admin`: stateless, horizontally scalable behind `admin-lb`
+- `dashboard`: stateless enough for horizontal scaling behind `dashboard-lb`
 
-`seed` uses Redis leader election:
-
-- multiple `seed` replicas can run
-- only the leader publishes into Kafka
-- standby replicas keep heartbeats and take over when the leader disappears
-
-Scale it with:
+Example scaling:
 
 ```bash
-docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --scale seed=2
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build \
+  --scale seed=2 \
+  --scale worker=2 \
+  --scale admin=2 \
+  --scale dashboard=2
 ```
-
-### Worker
-
-`worker` is active-active through a Kafka consumer group:
-
-- multiple replicas share the topic load
-- each worker publishes its own heartbeat
-
-Scale it with:
-
-```bash
-docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --scale worker=2
-```
-
-### Admin
-
-`admin` is stateless:
-
-- each instance reads topology and market data from Redis
-- `admin-lb` uses HAProxy to front the admin replicas
-
-Scale it with:
-
-```bash
-docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --scale admin=2
-```
-
-The externally visible entrypoint remains `http://localhost:18081`.
-
-## Service Ports
-
-Defaults come from `docker_ctp/.env.ha`:
-
-- Admin LB: `18081`
-- MySQL: `13307`
-- Redis: `16380`
-- Kafka internal client port exposed locally: `19092`
-- Kafka external port exposed locally: `19094`
-
-These alternate ports avoid colliding with the existing single-node stack already present in this repo.
-
-## Health and Topology
-
-The admin plane aggregates service heartbeats from Redis.
-
-Useful endpoints:
-
-- `/health`
-- `/api/topology`
-- `/api/instruments`
-- `/api/tick/<instrument>`
-
-Topology response includes:
-
-- all visible `seed`, `worker`, and `admin` instances
-- leader vs standby for `seed`
-- processed tick counters for `worker`
 
 ## Operational Commands
 
 Start:
 
 ```bash
+cd docker_ctp
+cp .env.ha .env.ha.local
 docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
 ```
 
-Tail logs:
+View logs:
 
 ```bash
-docker compose -f docker-compose.ha.yml --env-file .env.ha.local logs -f seed worker admin admin-lb
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local logs -f seed worker admin dashboard admin-lb dashboard-lb
 ```
 
 Stop:
@@ -169,14 +90,8 @@ Stop:
 docker compose -f docker-compose.ha.yml --env-file .env.ha.local down
 ```
 
-Destroy volumes too:
+Destroy volumes:
 
 ```bash
 docker compose -f docker-compose.ha.yml --env-file .env.ha.local down -v
 ```
-
-## Notes
-
-- The existing `docker_ctp/dashboard` Spring service is still available and unchanged.
-- This HA stack is a separate operational path focused on `seed + worker + admin`.
-- On Mac/Linux, fully local real-time CTP login is not guaranteed by this repo alone because the bundled vendor API assets are not packaged as a portable Docker-ready Linux client here. The relay approach is the practical cross-platform path.

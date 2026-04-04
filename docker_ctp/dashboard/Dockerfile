@@ -1,6 +1,6 @@
 FROM alpine:3.19 AS builder
 
-RUN apk add --no-cache openjdk17 maven
+RUN apk add --no-cache openjdk21 maven
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ RUN mvn dependency:go-offline -B && \
 
 FROM alpine:3.19
 
-RUN apk add --no-cache openjdk17-jre
+RUN apk add --no-cache openjdk21-jre
 
 WORKDIR /app
 

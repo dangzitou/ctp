@@ -127,6 +127,45 @@ services:
       timeout: 5s
       retries: 10
 
+  dashboard:
+    build:
+      context: ./dashboard
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: dashboard-consumer
+      KAFKA_TOPIC: ctp-ticks
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ctp_futures?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: ctpuser
+      SPRING_DATASOURCE_PASSWORD: ctp123456
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ctp-ha]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/stats"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+
+  dashboard-lb:
+    image: haproxy:2.9-alpine
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    ports:
+      - "${DASHBOARD_PORT}:8080"
+    volumes:
+      - ./dashboard-lb/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    restart: unless-stopped
+    networks: [ctp-ha]
+
   admin-lb:
     image: haproxy:2.9-alpine
     depends_on:
