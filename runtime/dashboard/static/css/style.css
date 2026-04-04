@@ -1,0 +1,115 @@
+/* CTP Dashboard Styles - JetBrains Mono + Dark Trading Terminal Aesthetic */
+/* Additional styles complementing inline styles in dashboard.html */
+
+:root {
+    --bg-deep: #07080a;
+    --bg-panel: #0d1117;
+    --bg-card: #111820;
+    --bg-hover: #1a2332;
+    --border: #1e2a3a;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #484f58;
+    --accent-green: #00ff88;
+    --accent-red: #ff3366;
+    --accent-blue: #58a6ff;
+    --accent-yellow: #f0c040;
+    --accent-purple: #bc8cff;
+}
+
+/* Additional component styles */
+
+.stat-value.bullish {
+    color: var(--accent-green);
+}
+
+.stat-value.bearish {
+    color: var(--accent-red);
+}
+
+/* Tooltip override for candlestick */
+.echarts-tooltip-cursor {
+    cursor: crosshair;
+}
+
+/* Period selector enhancement */
+.period-selector .period-btn:hover:not(.active) {
+    background: rgba(88, 166, 255, 0.1);
+    border-color: var(--accent-blue);
+}
+
+/* Grid pattern background for chart area */
+.chart-container {
+    background-image:
+        linear-gradient(rgba(30, 42, 58, 0.3) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(30, 42, 58, 0.3) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+/* Pulse animation for live data */
+@keyframes data-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(0, 255, 136, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+}
+
+.data-update-flash {
+    animation: data-pulse 0.6s ease-out;
+}
+
+/* Fade in animation for new items */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.instrument-item {
+    animation: fadeIn 0.2s ease-out;
+}
+
+/* Selected instrument highlight */
+.instrument-item.selected {
+    background: linear-gradient(90deg, rgba(88, 166, 255, 0.15), transparent);
+}
+
+/* Exchange group separator */
+.exchange-group + .exchange-group {
+    border-top: 1px solid var(--border);
+}
+
+/* Price flash animations */
+@keyframes flashGreen {
+    0% { background-color: rgba(0, 255, 136, 0.3); }
+    100% { background-color: transparent; }
+}
+
+@keyframes flashRed {
+    0% { background-color: rgba(255, 51, 102, 0.3); }
+    100% { background-color: transparent; }
+}
+
+.price-flash-up {
+    animation: flashGreen 0.5s ease-out;
+}
+
+.price-flash-down {
+    animation: flashRed 0.5s ease-out;
+}
+
+/* Keyboard shortcuts hint */
+.shortcuts-hint {
+    position: fixed;
+    bottom: 12px;
+    right: 12px;
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.shortcuts-hint kbd {
+    padding: 2px 5px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    margin: 0 2px;
+}

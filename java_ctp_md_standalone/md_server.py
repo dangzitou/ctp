@@ -1,0 +1,236 @@
+"""
+CTP Market Data TCP Server - standalone process running CTP.
+Publishes ticks via TCP to any number of subscribers.
+Avoids threading conflicts by running CTP in its own process.
+
+Usage: python md_server.py [port]
+Default port: 19842
+"""
+import sys
+import time
+import json
+import socket
+import threading
+import selectors
+import os
+
+sys.path.insert(0, r"E:\Develop\projects\ctp\runtime\md_simnow")
+import thostmduserapi as mdapi
+
+FRONT = "tcp://182.254.243.31:40011"
+DEFAULT_PORT = 19842
+
+# Build instrument list
+def build_instrument_list():
+    all_instruments = set()
+    shfe = [
+        "cu2605","cu2606","cu2607","cu2608","cu2609","cu2610","cu2611","cu2612",
+        "al2605","al2606","al2607","al2608","al2609","al2610","al2611","al2612",
+        "zn2605","zn2606","zn2607","zn2608","zn2609","zn2610","zn2611","zn2612",
+        "pb2605","pb2606","pb2607","pb2608","pb2609","pb2610","pb2611","pb2612",
+        "ni2605","ni2606","ni2607","ni2608","ni2609","ni2610","ni2611","ni2612",
+        "sn2605","sn2606","sn2607","sn2608","sn2609","sn2610","sn2611","sn2612",
+        "ss2605","ss2606","ss2607","ss2608","ss2609","ss2610","ss2611","ss2612",
+        "au2604","au2606","au2608","au2610","au2612",
+        "ag2604","ag2606","ag2608","ag2610","ag2612",
+        "ru2605","ru2606","ru2607","ru2608","ru2609","ru2610","ru2611","ru2612",
+        "bu2605","bu2606","bu2607","bu2608","bu2609","bu2610","bu2611","bu2612",
+        "rb2605","rb2606","rb2607","rb2608","rb2609","rb2610","rb2611","rb2612",
+        "hc2605","hc2606","hc2607","hc2608","hc2609","hc2610","hc2611","hc2612",
+        "i2605","i2606","i2607","i2608","i2609","i2610","i2611","i2612",
+        "j2605","j2606","j2607","j2608","j2609","j2610","j2611","j2612",
+        "jm2605","jm2606","jm2607","jm2608","jm2609","jm2610","jm2611","jm2612",
+    ]
+    all_instruments.update(shfe)
+    dce = [
+        "m2605","m2607","m2608","m2609","m2611","m2612",
+        "y2605","y2607","y2608","y2609","y2611","y2612",
+        "c2605","c2607","c2609","c2611","c2612",
+        "cs2605","cs2607","cs2609","cs2611","cs2612",
+        "p2605","p2607","p2608","p2609","p2610","p2611",
+        "a2605","a2607","a2609","a2611",
+        "b2605","b2607","b2609","b2611",
+        "l2605","l2607","l2608","l2609","l2611","l2612",
+        "pp2605","pp2606","pp2607","pp2608","pp2609","pp2610","pp2611","pp2612",
+        "v2605","v2607","v2608","v2609","v2611","v2612",
+        "eb2605","eb2606","eb2607","eb2608","eb2609","eb2610","eb2611","eb2612",
+        "eg2605","eg2606","eg2607","eg2608","eg2609","eg2610","eg2611","eg2612",
+        "pg2605","pg2606","pg2607","pg2608","pg2609","pg2610","pg2611","pg2612",
+    ]
+    all_instruments.update(dce)
+    czce = [
+        "ma2605","ma2607","ma2609","ma2611",
+        "ta2605","ta2607","ta2609","ta2611",
+        "fg2605","fg2607","fg2609","fg2611",
+        "pf2605","pf2607","pf2609","pf2611",
+        "rm2605","rm2607","rm2609","rm2611",
+        "sr2605","sr2607","sr2609","sr2611",
+        "cf2605","cf2607","cf2609","cf2611",
+        "cy2605","cy2607","cy2609","cy2611",
+        "oi2605","oi2607","oi2609","oi2611",
+        "wh2605","wh2607","wh2609","wh2611",
+        "pm2605","pm2607","pm2609","pm2611",
+    ]
+    all_instruments.update(czce)
+    cffex = [
+        "if2604","if2605","if2606","if2609",
+        "ih2604","ih2605","ih2606","ih2609",
+        "ic2604","ic2605","ic2606","ic2609",
+        "im2604","im2605","im2606","im2609",
+        "tf2606","tf2609","tf2612",
+        "ts2606","ts2609","ts2612",
+        "t2606","t2609","t2612",
+    ]
+    all_instruments.update(cffex)
+    ine = [
+        "sc2605","sc2606","sc2607","sc2608","sc2609","sc2610","sc2611","sc2612",
+    ]
+    all_instruments.update(ine)
+    return list(all_instruments)
+
+
+class MDServer:
+    """TCP server broadcasting CTP ticks to subscribers."""
+
+    def __init__(self, port):
+        self.port = port
+        self.sock = None
+        self.clients = set()
+        self.running = False
+        self.base_prices = {}
+        self.ctp_api = None
+        self.ctp_spi = None
+        self.lock = threading.Lock()
+
+    def start(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("0.0.0.0", self.port))
+        self.sock.listen(50)
+        self.sock.settimeout(1.0)
+        self.running = True
+        print(f"[MDServer] Listening on port {self.port}")
+
+        # Start CTP in same process (it's in its own thread-safe process context)
+        self._start_ctp()
+
+        # Accept clients
+        while self.running:
+            try:
+                client, addr = self.sock.accept()
+                client.settimeout(60.0)
+                self.clients.add(client)
+                print(f"[MDServer] Client connected: {addr}, total={len(self.clients)}")
+            except socket.timeout:
+                pass
+            except Exception as e:
+                if self.running:
+                    print(f"[MDServer] Accept error: {e}")
+
+    def _start_ctp(self):
+        """Start CTP in a separate daemon thread."""
+        t = threading.Thread(target=self._ctp_thread, daemon=True)
+        t.start()
+
+    def _ctp_thread(self):
+        """Run CTP - runs in its own thread, calls self._on_tick for each tick."""
+        class Spi(mdapi.CThostFtdcMdSpi):
+            def __init__(s, server):
+                super().__init__()
+                self.server = server
+
+            def OnFrontConnected(s):
+                print("[CTP] Front Connected")
+                req = mdapi.CThostFtdcReqUserLoginField()
+                self.ctp_api.ReqUserLogin(req, 0)
+
+            def OnFrontDisconnected(s, n):
+                print(f"[CTP] Disconnected n={n}")
+
+            def OnRspUserLogin(s, p, info, req, last):
+                if info and info.ErrorID != 0:
+                    print(f"[CTP] Login failed: {info.ErrorID} {info.ErrorMsg}")
+                    return
+                print(f"[CTP] Login OK. TradingDay={p.TradingDay}")
+                codes = [c.encode() for c in build_instrument_list()]
+                self.ctp_api.SubscribeMarketData(codes, len(codes))
+                print(f"[CTP] Subscribed {len(codes)} instruments")
+
+            def OnRtnDepthMarketData(s, p):
+                iid = p.InstrumentID
+                price = float(p.LastPrice) if p.LastPrice else 0
+                vol = int(p.Volume) if p.Volume else 0
+                bid = float(p.BidPrice1) if p.BidPrice1 else 0
+                ask = float(p.AskPrice1) if p.AskPrice1 else 0
+                oi = int(p.OpenInterest) if p.OpenInterest else 0
+                ts = time.time()
+
+                with self.server.lock:
+                    if iid not in self.server.base_prices:
+                        self.server.base_prices[iid] = price
+                    base = self.server.base_prices[iid]
+                    change = price - base
+                    change_pct = (change / base * 100) if base else 0
+
+                tick = {
+                    "type": "tick",
+                    "instrument_id": iid,
+                    "price": price,
+                    "volume": vol,
+                    "bid": bid,
+                    "ask": ask,
+                    "open_interest": oi,
+                    "change": round(change, 2),
+                    "change_pct": round(change_pct, 2),
+                    "timestamp": ts,
+                }
+                self.server._broadcast(tick)
+
+        self.ctp_api = mdapi.CThostFtdcMdApi.CreateFtdcMdApi()
+        self.ctp_spi = Spi(self)
+        self.ctp_api.RegisterFront(FRONT)
+        self.ctp_api.RegisterSpi(self.ctp_spi)
+        self.ctp_api.Init()
+        print("[CTP] API Init complete")
+
+        # Keep thread alive
+        while self.running:
+            time.sleep(1)
+
+    def _broadcast(self, tick):
+        """Send tick to all connected clients."""
+        if not self.clients:
+            return
+        msg = ("TICK:" + json.dumps(tick) + "\n").encode("utf-8")
+        dead = set()
+        for client in self.clients:
+            try:
+                client.sendall(msg)
+            except:
+                dead.add(client)
+        for client in dead:
+            self.clients.discard(client)
+            try:
+                client.close()
+            except:
+                pass
+
+    def stop(self):
+        self.running = False
+        if self.sock:
+            self.sock.close()
+        if self.ctp_api:
+            self.ctp_api.Release()
+
+
+if __name__ == "__main__":
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    print(f"[MDServer] CTP Market Data TCP Server v1.0")
+    print(f"[MDServer] Front: {FRONT}")
+    print(f"[MDServer] Port: {port}")
+    server = MDServer(port)
+    try:
+        server.start()
+    except KeyboardInterrupt:
+        print("\n[MDServer] Shutting down...")
+        server.stop()

@@ -1,0 +1,47 @@
+# CTP API files (proprietary)
+*.zip
+*.dll
+*.con
+ctpapi_python_6.7.11/
+tts_6.7.11/
+tap_6.7.1/
+tap_6.7.2/
+qdp_6.7.1.zip
+qdp_6.7.2.zip
+openctp/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Java
+target/
+*.class
+*.jar
+*.ear
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docker volumes
+docker_ctp/mysql-data/
+docker_ctp/redis-data/
+
+# Config with secrets
+*.local.yml
+.env

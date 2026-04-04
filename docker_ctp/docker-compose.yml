@@ -1,0 +1,122 @@
+services:
+  # ===== Kafka (KRaft mode, no Zookeeper) =====
+  kafka:
+    image: apache/kafka:latest
+    container_name: ctp-kafka
+    environment:
+      # KRaft mode - no Zookeeper needed
+      - KAFKA_PROCESS_ROLES=controller,broker
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=EXTERNAL
+      # Listeners
+      - KAFKA_LISTENERS=CONTROLLER://:9093,EXTERNAL://:9094,CLIENT://:9092
+      - KAFKA_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,CLIENT:PLAINTEXT
+      # Ports
+      - KAFKA_CONTROLLER_PORT=9093
+      - KAFKA_NODE_ID=1
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_LOG_DIRS=/tmp/kraft-combined-logs
+      - ALLOW_PLAINTEXT_LISTENER=true
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    networks: [ctp-net]
+    healthcheck:
+      test: ["CMD-SHELL", "bash /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ===== MySQL =====
+  mysql:
+    image: mysql:8.0
+    container_name: ctp-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=ctp123456
+      - MYSQL_DATABASE=ctp_futures
+      - MYSQL_USER=ctpuser
+      - MYSQL_PASSWORD=ctp123456
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks: [ctp-net]
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== Redis =====
+  redis:
+    image: redis:7-alpine
+    container_name: ctp-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    networks: [ctp-net]
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== CTP Seed (Python -> Kafka) =====
+  # Note: CTP DLL is Windows-only, seed must run on Windows host
+  # This container is for reference - actual seed runs as ctp_seed.py on Windows
+  ctp-seed:
+    build:
+      context: ./seed
+      dockerfile: Dockerfile
+    container_name: ctp-seed
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - CTP_FRONT=tcp://182.254.243.31:40011
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=ctp-ticks
+    networks: [ctp-net]
+    restart: unless-stopped
+
+  # ===== Dashboard (Spring Boot + Kafka Consumer + WebSocket) =====
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: ctp-dashboard
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=ctp-ticks
+      - KAFKA_GROUP_ID=dashboard-consumer
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PORT=6379
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/ctp_futures?useUnicode=true&characterEncoding=utf8
+      - SPRING_DATASOURCE_USERNAME=ctpuser
+      - SPRING_DATASOURCE_PASSWORD=ctp123456
+    ports:
+      - "8080:8080"
+    networks: [ctp-net]
+    restart: unless-stopped
+
+networks:
+  ctp-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
