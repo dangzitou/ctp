@@ -11,6 +11,7 @@ from .common import write_summary
 
 COMMENT_MARKER = "<!-- ai-commit-review -->"
 ISSUE_MARKER = "<!-- ai-repo-audit -->"
+FIX_PR_MARKER = "<!-- ai-auto-fix-pr -->"
 
 
 def github_request(method: str, url: str, payload: dict | None = None) -> dict | list:
@@ -81,3 +82,20 @@ def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None
                 github_request("PATCH", issue["url"], {"title": title, "body": body, "labels": labels})
                 return
     github_request("POST", repo_api_url("/issues"), {"title": title, "body": body, "labels": labels})
+
+
+def upsert_pull_request(title: str, body_content: str, head: str, base: str, labels: list[str] | None = None) -> dict:
+    pulls_url = repo_api_url("/pulls?state=open&per_page=100")
+    body = f"{FIX_PR_MARKER}\n{body_content}"
+    pulls = github_request("GET", pulls_url)
+    if isinstance(pulls, list):
+        for pr in pulls:
+            if pr.get("head", {}).get("ref") == head and pr.get("base", {}).get("ref") == base:
+                updated = github_request("PATCH", pr["url"], {"title": title, "body": body, "base": base})
+                if labels:
+                    github_request("PATCH", repo_api_url(f"/issues/{pr['number']}"), {"labels": labels})
+                return updated
+    created = github_request("POST", repo_api_url("/pulls"), {"title": title, "body": body, "head": head, "base": base})
+    if labels and created.get("number"):
+        github_request("PATCH", repo_api_url(f"/issues/{created['number']}"), {"labels": labels})
+    return created

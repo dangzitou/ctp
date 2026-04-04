@@ -297,28 +297,52 @@ jobs:
             .ai/auto-fix.json
             .ai/auto-fix-summary.md
           if-no-files-found: warn
+      - name: Prepare auto-fix branch
+        id: prepare_fix_branch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FIX_BRANCH="ai/auto-fix/${GITHUB_RUN_ID}-${GITHUB_SHA::7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$FIX_BRANCH"
+          git add -A
+          git commit -m "chore(ai): 自动修复审查发现的问题"
+          git push --force origin "$FIX_BRANCH"
+          {
+            echo "changed=true"
+            echo "fix_branch=$FIX_BRANCH"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build auto-fix PR body
+        if: steps.prepare_fix_branch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          {
+            echo "本 PR 由 AI 代码审查 workflow 自动生成，用于修复本次审查中识别出的明确问题。"
+            echo
+            echo "来源："
+            echo "- 仓库：\`${GITHUB_REPOSITORY}\`"
+            echo "- 分支：\`${GITHUB_REF_NAME}\`"
+            echo "- 提交：\`${GITHUB_SHA}\`"
+            echo "- Workflow：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "说明："
+            echo "- 仅尝试修复审查报告中有明确证据支持的问题"
+            echo "- 不直接修改目标分支"
+            echo "- 如果没有生成有效改动，则不会创建 PR"
+            echo
+            cat .ai/auto-fix-summary.md
+          } > .ai/auto-fix-pr-body.md
       - name: Create auto-fix pull request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          commit-message: "chore(ai): 自动修复审查发现的问题"
-          branch: "ai/auto-fix/${{ github.run_id }}"
-          delete-branch: true
-          title: "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}"
-          body: |
-            本 PR 由 AI 代码审查 workflow 自动生成，用于修复本次审查中识别出的明确问题。
-
-            来源：
-            - 仓库：`${{ github.repository }}`
-            - 分支：`${{ github.ref_name }}`
-            - 提交：`${{ github.sha }}`
-            - Workflow：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            说明：
-            - 仅尝试修复审查报告中有明确证据支持的问题
-            - 不直接修改主分支
-            - 如果没有生成有效改动，则不会创建 PR
-          base: ${{ github.ref_name }}
-          labels: |
-            automation
-            triage
-          branch-suffix: short-commit-hash
+        if: steps.prepare_fix_branch.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python -m tools.ai_review.open_fix_pr
+          --title "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}"
+          --body-file .ai/auto-fix-pr-body.md
+          --head "${{ steps.prepare_fix_branch.outputs.fix_branch }}"
+          --base "${{ github.ref_name }}"
