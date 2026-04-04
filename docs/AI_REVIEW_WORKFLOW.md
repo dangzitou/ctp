@@ -10,6 +10,10 @@ This repository now uses MiniMax through the OpenAI-compatible API for two GitHu
 Configure this GitHub secret:
 
 - `MINIMAX_API_KEY`
+- `SMTP_HOST` for email notifications
+- `SMTP_PORT` optional if not using the default SMTP port
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD`
 
 Optional GitHub repository variables:
 
@@ -17,6 +21,9 @@ Optional GitHub repository variables:
 - `AI_AUDIT_MODEL`: defaults to `MiniMax-M2.5`
 - `AI_REVIEW_MAX_FILES`: defaults to `12`
 - `AI_REVIEW_MAX_PATCH_CHARS`: defaults to `60000`
+- `AI_REVIEW_MAIL_TO`: recipient email for review notifications
+- `AI_REVIEW_MAIL_FROM`: optional sender address override
+- `SMTP_USE_TLS`: defaults to enabled
 
 The workflows set:
 
@@ -44,6 +51,7 @@ Outputs:
 
 - GitHub Actions summary
 - upserted commit comment on the pushed SHA
+- optional Chinese email notification after the coordinator job
 
 ## Scheduled Audit Workflow
 
@@ -101,6 +109,17 @@ The scheduled audit reads a curated repository snapshot focused on:
 - Coordinator jobs still generate a degraded summary when reviewer jobs fail.
 - Push review keeps commit comments idempotent with a fixed marker.
 - Scheduled audit keeps a single reusable issue instead of opening duplicates.
+- If SMTP settings are missing, the review email job is skipped or fails clearly based on the configured recipient and SMTP secrets.
+
+## Language And Email
+
+- Reviewer and coordinator prompts now require Simplified Chinese output.
+- The same Chinese report is used for:
+  - Actions summary
+  - commit comment
+  - optional email body
+- Email subjects follow the format:
+  - `【CTP代码审查】owner/repo@branch 审查完成`
 
 ## Local Notes
 

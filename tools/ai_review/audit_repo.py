@@ -53,7 +53,7 @@ def reviewer(role: str, input_path: str, output_path: str, strict: bool) -> int:
     return 1 if strict and not result.get("ok") else 0
 
 
-def coordinate(input_path: str, outputs: list[str], strict: bool) -> int:
+def coordinate(input_path: str, outputs: list[str], strict: bool, report_output: str | None = None) -> int:
     payload = read_json(input_path)
     reviewer_results = [read_json(path) for path in outputs if os.path.exists(path)]
     failed = [item for item in reviewer_results if not item.get("ok")]
@@ -68,11 +68,11 @@ def coordinate(input_path: str, outputs: list[str], strict: bool) -> int:
             )
         except Exception as exc:
             final_report = (
-                "## Verdict\nThe audit coordinator failed and produced a degraded report.\n\n"
-                "## Findings\n"
-                f"- [high] workflow - audit coordinator failed with `{short_exc(exc)}`.\n\n"
-                "## Test Gaps\n- Re-run the audit after fixing the coordinator failure.\n\n"
-                "## Agent Breakdown\n"
+                "## 总结\n巡查协调器执行失败，目前仅提供降级结果。\n\n"
+                "## 发现\n"
+                f"- [高] workflow - 巡查协调器执行失败，错误为 `{short_exc(exc)}`。\n\n"
+                "## 测试缺口\n- 修复协调器失败后重新运行巡查 workflow。\n\n"
+                "## Agent 明细\n"
                 + "\n".join(
                     f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
                     for item in reviewer_results
@@ -81,22 +81,26 @@ def coordinate(input_path: str, outputs: list[str], strict: bool) -> int:
             failed.append({"role": "coordinator", "ok": False, "error": short_exc(exc)})
     else:
         final_report = (
-            "## Verdict\nThe scheduled audit did not complete successfully.\n\n"
-            "## Findings\n- [high] workflow - all audit agents failed.\n\n"
-            "## Test Gaps\n- Re-run the audit after fixing API secret or workflow issues.\n\n"
-            "## Agent Breakdown\n"
+            "## 总结\n定时巡查未能成功完成。\n\n"
+            "## 发现\n- [高] workflow - 所有巡查 agent 都失败了。\n\n"
+            "## 测试缺口\n- 请检查 API 密钥或 workflow 配置后重新运行巡查。\n\n"
+            "## Agent 明细\n"
             + "\n".join(
                 f"- {item.get('role', 'unknown')}: failed: {item.get('error', 'unknown error')}"
                 for item in reviewer_results
             )
         )
 
+    if report_output:
+        ensure_parent(report_output)
+        with open(report_output, "w", encoding="utf-8") as handle:
+            handle.write(final_report.rstrip() + "\n")
     if os.getenv("GITHUB_REPOSITORY") and os.getenv("GITHUB_TOKEN"):
         ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
         ensure_label("automation", "5319e7", "Automation-generated issue")
         ensure_label("triage", "d4c5f9", "Needs triage")
         upsert_audit_issue(AUDIT_TITLE, final_report, ["ai-audit", "automation", "triage"])
-    write_summary(f"## AI repo audit\n\nReviewed model: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
+    write_summary(f"## AI 仓库巡查\n\n审查模型: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
     print(final_report)
     return 1 if strict and failed else 0
 
@@ -118,6 +122,7 @@ def main() -> None:
     p_coord.add_argument("--input", required=True)
     p_coord.add_argument("--review", dest="reviews", action="append", default=[])
     p_coord.add_argument("--strict", action="store_true")
+    p_coord.add_argument("--output-report")
 
     args = parser.parse_args()
     if args.cmd == "prepare":
@@ -125,7 +130,7 @@ def main() -> None:
     elif args.cmd == "review":
         raise SystemExit(reviewer(args.role, args.input, args.output, args.strict))
     elif args.cmd == "coordinate":
-        raise SystemExit(coordinate(args.input, args.reviews, args.strict))
+        raise SystemExit(coordinate(args.input, args.reviews, args.strict, args.output_report))
 
 
 if __name__ == "__main__":
