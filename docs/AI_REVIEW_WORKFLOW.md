@@ -1,13 +1,13 @@
 # AI Review And Audit Workflows
 
-This repository now uses MiniMax through the OpenAI-compatible API for two GitHub Actions workflows:
+This repository uses MiniMax through the OpenAI-compatible API for two GitHub Actions workflows:
 
 - `.github/workflows/ai-code-review.yml`
 - `.github/workflows/ai-repo-audit.yml`
 
 ## Setup
 
-Configure this GitHub secret:
+Configure these GitHub secrets:
 
 - `MINIMAX_API_KEY`
 - `SMTP_HOST` for email notifications
@@ -117,12 +117,12 @@ The scheduled audit reads a curated repository snapshot focused on:
 
 ## Language And Email
 
-- Reviewer and coordinator prompts now require Simplified Chinese output.
+- Reviewer and coordinator prompts require Simplified Chinese output.
 - The same Chinese report is used for:
   - Actions summary
   - commit comment
   - optional email body
-- When auto-fix succeeds, the workflow will also try to open a Chinese PR containing the proposed repair.
+- When auto-fix succeeds, the workflow also tries to open a Chinese PR containing the proposed repair.
 - Email subjects follow the format:
   - `【CTP代码审查】owner/repo@branch 审查完成`
 
@@ -130,4 +130,4 @@ The scheduled audit reads a curated repository snapshot focused on:
 
 - The workflows run on GitHub-hosted runners, not on your local machine.
 - Local dry-run is possible only at script level.
-- Full behavior like commit comments and audit issues requires GitHub Actions context.
+- Full behavior like commit comments, auto-fix PRs, audit issues, and emails requires GitHub Actions context.
