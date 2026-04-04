@@ -1,34 +1,40 @@
 #!/usr/bin/env python3
-"""Multi-agent push review workflow entrypoint."""
+"""Multi-agent scheduled audit workflow entrypoint."""
 
 from __future__ import annotations
 
 import argparse
 import os
+from datetime import datetime, timezone
 
-from .common import ensure_parent, load_event, main_cli_error, read_json, resolve_base_sha, run_git, short_exc, write_json, write_summary
-from .github_api import upsert_commit_comment
+from .common import ensure_parent, main_cli_error, read_json, short_exc, write_json, write_summary
+from .github_api import ensure_label, upsert_audit_issue
 from .llm import model_for, request_markdown
 from .prompts import REVIEWER_SYSTEM, build_coordinate_prompt, build_reviewer_prompt
-from .review_data import collect_changed_files, collect_diff
+from .review_data import collect_repo_snapshot
 
 
 DEFAULT_MODEL = "MiniMax-M2.5"
+AUDIT_TITLE = "AI Repo Audit"
 
 
 def prepare(output_path: str) -> None:
-    head_sha = os.getenv("GITHUB_SHA", "").strip() or run_git("rev-parse", "HEAD")
-    event = load_event()
-    base_sha = resolve_base_sha(event, head_sha)
-    files = collect_changed_files(base_sha, head_sha)
-    diff_text, included_files, skipped_files = collect_diff(base_sha, head_sha, files)
+    snapshot = collect_repo_snapshot()
     payload = {
         "repository": os.getenv("GITHUB_REPOSITORY", "unknown"),
-        "base_sha": base_sha,
-        "head_sha": head_sha,
-        "included_files": included_files,
-        "skipped_files": skipped_files,
-        "review_material": diff_text,
+        "head_sha": snapshot["head_sha"],
+        "base_sha": snapshot["head_sha"],
+        "included_files": [item["path"] for item in snapshot["files"]],
+        "skipped_files": 0,
+        "review_material": (
+            "Recent commits:\n"
+            + snapshot["recent_commits"]
+            + "\n\nWorking tree status:\n"
+            + snapshot["status_short"]
+            + "\n\n"
+            + "\n\n".join(f"### {item['path']}\n```text\n{item['content']}\n```" for item in snapshot["files"])
+        ),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     ensure_parent(output_path)
     write_json(output_path, payload)
@@ -37,16 +43,9 @@ def prepare(output_path: str) -> None:
 def reviewer(role: str, input_path: str, output_path: str, strict: bool) -> int:
     payload = read_json(input_path)
     try:
-        if not payload.get("review_material"):
-            result = {
-                "role": role,
-                "ok": True,
-                "content": "## Verdict\nNo reviewable changes were detected.\n\n## Findings\n- No major issues detected in the reviewed material.\n\n## Test Gaps\n- No critical additional tests identified from this review.\n",
-            }
-        else:
-            model = model_for("AI_REVIEW_MODEL", DEFAULT_MODEL)
-            content = request_markdown(REVIEWER_SYSTEM, build_reviewer_prompt(role, payload), model)
-            result = {"role": role, "ok": True, "content": content}
+        model = model_for("AI_AUDIT_MODEL", DEFAULT_MODEL)
+        content = request_markdown(REVIEWER_SYSTEM, build_reviewer_prompt(role, payload), model)
+        result = {"role": role, "ok": True, "content": content}
     except Exception as exc:
         result = {"role": role, "ok": False, "error": short_exc(exc)}
     ensure_parent(output_path)
@@ -60,19 +59,19 @@ def coordinate(input_path: str, outputs: list[str], strict: bool) -> int:
     failed = [item for item in reviewer_results if not item.get("ok")]
 
     if reviewer_results and any(item.get("ok") for item in reviewer_results):
-        model = model_for("AI_REVIEW_MODEL", DEFAULT_MODEL)
+        model = model_for("AI_AUDIT_MODEL", DEFAULT_MODEL)
         try:
             final_report = request_markdown(
                 REVIEWER_SYSTEM,
-                build_coordinate_prompt("review", payload, reviewer_results),
+                build_coordinate_prompt("audit", payload, reviewer_results),
                 model,
             )
         except Exception as exc:
             final_report = (
-                "## Verdict\nCoordinator failed; partial reviewer output is available.\n\n"
+                "## Verdict\nThe audit coordinator failed and produced a degraded report.\n\n"
                 "## Findings\n"
-                f"- [high] workflow - coordinator failed with `{short_exc(exc)}`; reviewer outputs may be incomplete.\n\n"
-                "## Test Gaps\n- Re-run the review workflow after fixing the coordinator failure.\n\n"
+                f"- [high] workflow - audit coordinator failed with `{short_exc(exc)}`.\n\n"
+                "## Test Gaps\n- Re-run the audit after fixing the coordinator failure.\n\n"
                 "## Agent Breakdown\n"
                 + "\n".join(
                     f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
@@ -82,9 +81,9 @@ def coordinate(input_path: str, outputs: list[str], strict: bool) -> int:
             failed.append({"role": "coordinator", "ok": False, "error": short_exc(exc)})
     else:
         final_report = (
-            "## Verdict\nThe multi-agent review did not complete successfully.\n\n"
-            "## Findings\n- [high] workflow - all reviewer agents failed; no reliable review result was produced.\n\n"
-            "## Test Gaps\n- Re-run the workflow after configuring the required API secret and checking agent failures.\n\n"
+            "## Verdict\nThe scheduled audit did not complete successfully.\n\n"
+            "## Findings\n- [high] workflow - all audit agents failed.\n\n"
+            "## Test Gaps\n- Re-run the audit after fixing API secret or workflow issues.\n\n"
             "## Agent Breakdown\n"
             + "\n".join(
                 f"- {item.get('role', 'unknown')}: failed: {item.get('error', 'unknown error')}"
@@ -92,9 +91,12 @@ def coordinate(input_path: str, outputs: list[str], strict: bool) -> int:
             )
         )
 
-    write_summary(f"## AI code review\n\nReviewed model: `{model_for('AI_REVIEW_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
     if os.getenv("GITHUB_REPOSITORY") and os.getenv("GITHUB_TOKEN"):
-        upsert_commit_comment(final_report, payload["head_sha"])
+        ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
+        ensure_label("automation", "5319e7", "Automation-generated issue")
+        ensure_label("triage", "d4c5f9", "Needs triage")
+        upsert_audit_issue(AUDIT_TITLE, final_report, ["ai-audit", "automation", "triage"])
+    write_summary(f"## AI repo audit\n\nReviewed model: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
     print(final_report)
     return 1 if strict and failed else 0
 

@@ -37,6 +37,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+.ai/
 docker_ctp/*/*.out.log
 docker_ctp/*/*.err.log
 runtime/*/*.out.log

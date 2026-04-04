@@ -1,52 +1,109 @@
-# AI Code Review Workflow
+# AI Review And Audit Workflows
 
-This repository now includes a GitHub Actions workflow at `.github/workflows/ai-code-review.yml`.
+This repository now uses MiniMax through the OpenAI-compatible API for two GitHub Actions workflows:
 
-It is inspired by PR-Agent's "review the change, publish concrete findings" loop, but adapted to this repo's commit-driven workflow:
-
-- Trigger: every `push` to a branch, plus manual `workflow_dispatch`
-- Input: the diff between the previous pushed commit and the new commit
-- Output:
-  - a GitHub Actions run summary
-  - a commit comment attached to the pushed SHA
+- `.github/workflows/ai-code-review.yml`
+- `.github/workflows/ai-repo-audit.yml`
 
 ## Setup
 
-Add this repository secret:
+Configure this GitHub secret:
 
-- `OPENAI_API_KEY`: API key used by the workflow
+- `MINIMAX_API_KEY`
 
-Optional repository variables:
+Optional GitHub repository variables:
 
-- `AI_REVIEW_MODEL`: defaults to `gpt-5-mini`
+- `AI_REVIEW_MODEL`: defaults to `MiniMax-M2.5`
+- `AI_AUDIT_MODEL`: defaults to `MiniMax-M2.5`
 - `AI_REVIEW_MAX_FILES`: defaults to `12`
 - `AI_REVIEW_MAX_PATCH_CHARS`: defaults to `60000`
 
+The workflows set:
+
+- `OPENAI_API_KEY=${{ secrets.MINIMAX_API_KEY }}`
+- `OPENAI_BASE_URL=https://api.minimaxi.com/v1`
+
+No API key is stored in code, repo files, or logs.
+
+## Push Review Workflow
+
+`ai-code-review.yml` runs on:
+
+- every `push`
+- manual `workflow_dispatch`
+
+It uses a multi-agent pattern:
+
+1. `prepare-diff`
+2. `review-code`
+3. `review-security`
+4. `review-docs-runtime`
+5. `review-coordinator`
+
+Outputs:
+
+- GitHub Actions summary
+- upserted commit comment on the pushed SHA
+
+## Scheduled Audit Workflow
+
+`ai-repo-audit.yml` runs on:
+
+- `schedule` every 6 hours
+- manual `workflow_dispatch`
+
+It uses a second multi-agent pattern:
+
+1. `prepare-snapshot`
+2. `audit-operations`
+3. `audit-code-health`
+4. `audit-workflow-release`
+5. `audit-coordinator`
+
+Outputs:
+
+- GitHub Actions summary
+- one reusable GitHub issue titled `AI Repo Audit`
+
+Labels used:
+
+- `ai-audit`
+- `automation`
+- `triage`
+
 ## What Gets Reviewed
 
-The review script prioritizes the code you are actively maintaining:
+The push review prioritizes maintained code and documentation:
 
 - `runtime/**`
 - `docker_ctp/**`
 - `java_ctp_md/**`
 - `docs/**`
-- root-level source files and workflow files
+- root workflow and source files
 
-It skips vendor and generated content such as:
+It skips vendor and generated material such as:
 
 - `openctp/**`
 - packaged SDK folders
 - `target/**`
 - `.dll`, `.pyd`, `.jar`, `.class`, `.zip`
 
-## Review Style
+The scheduled audit reads a curated repository snapshot focused on:
 
-The workflow asks the model to focus on:
+- workflow files
+- deployment/config files
+- AI automation scripts
+- key runtime and docker entrypoints
 
-- bugs and behavioral regressions
-- data-flow breakage
-- security issues
-- unsafe runtime assumptions
-- missing high-value verification
+## Failure Behavior
 
-The output is intentionally terse and findings-first so it behaves more like a code reviewer than a generic summarizer.
+- Missing `MINIMAX_API_KEY` causes reviewer jobs to fail clearly.
+- Coordinator jobs still generate a degraded summary when reviewer jobs fail.
+- Push review keeps commit comments idempotent with a fixed marker.
+- Scheduled audit keeps a single reusable issue instead of opening duplicates.
+
+## Local Notes
+
+- The workflows run on GitHub-hosted runners, not on your local machine.
+- Local dry-run is possible only at script level.
+- Full behavior like commit comments and audit issues requires GitHub Actions context.

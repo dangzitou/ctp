@@ -1,0 +1,152 @@
+name: AI Repo Audit
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-repo-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
+      - run: python -m tools.ai_review.audit_repo prepare --output .ai/audit-payload.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-payload
+          path: .ai/audit-payload.json
+
+  audit-operations:
+    needs: prepare-snapshot
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-payload
+          path: .ai
+      - env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_BASE_URL: https://api.minimaxi.com/v1
+          OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
+        run: python -m tools.ai_review.audit_repo review --role operations --input .ai/audit-payload.json --output .ai/audit-operations.json --strict
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-operations
+          path: .ai/audit-operations.json
+
+  audit-code-health:
+    needs: prepare-snapshot
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-payload
+          path: .ai
+      - env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_BASE_URL: https://api.minimaxi.com/v1
+          OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
+        run: python -m tools.ai_review.audit_repo review --role code-health --input .ai/audit-payload.json --output .ai/audit-code-health.json --strict
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-code-health
+          path: .ai/audit-code-health.json
+
+  audit-workflow-release:
+    needs: prepare-snapshot
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-payload
+          path: .ai
+      - env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_BASE_URL: https://api.minimaxi.com/v1
+          OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
+        run: python -m tools.ai_review.audit_repo review --role workflow-release --input .ai/audit-payload.json --output .ai/audit-workflow-release.json --strict
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-workflow-release
+          path: .ai/audit-workflow-release.json
+
+  audit-coordinator:
+    needs:
+      - prepare-snapshot
+      - audit-operations
+      - audit-code-health
+      - audit-workflow-release
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
+      - uses: actions/download-artifact@v4
+        with:
+          path: .ai-artifacts
+      - name: Arrange artifact files
+        shell: bash
+        run: |
+          mkdir -p .ai
+          cp .ai-artifacts/audit-payload/audit-payload.json .ai/audit-payload.json
+          [ -f .ai-artifacts/audit-operations/audit-operations.json ] && cp .ai-artifacts/audit-operations/audit-operations.json .ai/audit-operations.json || true
+          [ -f .ai-artifacts/audit-code-health/audit-code-health.json ] && cp .ai-artifacts/audit-code-health/audit-code-health.json .ai/audit-code-health.json || true
+          [ -f .ai-artifacts/audit-workflow-release/audit-workflow-release.json ] && cp .ai-artifacts/audit-workflow-release/audit-workflow-release.json .ai/audit-workflow-release.json || true
+      - env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_BASE_URL: https://api.minimaxi.com/v1
+          OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python -m tools.ai_review.audit_repo coordinate
+          --input .ai/audit-payload.json
+          --review .ai/audit-operations.json
+          --review .ai/audit-code-health.json
+          --review .ai/audit-workflow-release.json
+          --strict
