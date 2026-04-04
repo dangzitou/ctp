@@ -43,6 +43,15 @@ def should_review(path: str) -> bool:
     return Path(normalized).suffix.lower() in TEXT_EXTENSIONS
 
 
+def should_auto_fix(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    if not should_review(normalized):
+        return False
+    if normalized.startswith(".github/workflows/"):
+        return False
+    return True
+
+
 def collect_changed_files(base_sha: str, head_sha: str) -> list[str]:
     output = run_git("diff", "--name-only", base_sha, head_sha)
     files = [line.strip() for line in output.splitlines() if line.strip()]

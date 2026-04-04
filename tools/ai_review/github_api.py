@@ -11,6 +11,44 @@ from .common import write_summary
 
 COMMENT_MARKER = "<!-- ai-commit-review -->"
 ISSUE_MARKER = "<!-- ai-repo-audit -->"
+FIX_PR_MARKER = "<!-- ai-auto-fix-pr -->"
+
+
+class GitHubApiError(RuntimeError):
+    def __init__(self, code: int, message: str, body: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.body = body
+
+
+def _http_error_details(exc: urllib.error.HTTPError) -> GitHubApiError:
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+    accepted = exc.headers.get("x-accepted-github-permissions", "").strip()
+    api_message = ""
+    if body:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {}
+        api_message = str(payload.get("message", "")).strip()
+
+    parts = [f"GitHub API request failed with HTTP {exc.code}: {exc.reason}."]
+    if api_message:
+        parts.append(api_message)
+    elif body:
+        parts.append(f"Response: {body}")
+    if accepted:
+        parts.append(f"Required permissions: `{accepted}`.")
+    if exc.code == 403 and api_message == "Resource not accessible by personal access token":
+        parts.append(
+            "The current token cannot create pull requests. "
+            "Configure repository secret `AI_REVIEW_GH_TOKEN` with `Pull requests: Read and write`, "
+            "or enable GitHub Actions to create pull requests for `GITHUB_TOKEN`."
+        )
+    return GitHubApiError(exc.code, " ".join(parts), body)
 
 
 def github_request(method: str, url: str, payload: dict | None = None) -> dict | list:
@@ -30,10 +68,13 @@ def github_request(method: str, url: str, payload: dict | None = None) -> dict |
         headers["Content-Type"] = "application/json"
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        body = response.read().decode(charset)
-        return json.loads(body) if body else {}
+    try:
+        with urllib.request.urlopen(request) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            body = response.read().decode(charset)
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        raise _http_error_details(exc) from exc
 
 
 def repo_api_url(path: str) -> str:
@@ -42,6 +83,18 @@ def repo_api_url(path: str) -> str:
     if not repo:
         raise RuntimeError("`GITHUB_REPOSITORY` is missing.")
     return f"{api_base}/repos/{repo}{path}"
+
+
+def repo_html_url(path: str = "") -> str:
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+    server_url = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    if not repo:
+        raise RuntimeError("`GITHUB_REPOSITORY` is missing.")
+    return f"{server_url}/{repo}{path}"
+
+
+def compare_url(base: str, head: str) -> str:
+    return repo_html_url(f"/compare/{base}...{head}?expand=1")
 
 
 def upsert_commit_comment(review_body: str, head_sha: str) -> None:
@@ -56,15 +109,15 @@ def upsert_commit_comment(review_body: str, head_sha: str) -> None:
                     github_request("PATCH", comment["url"], {"body": body})
                     return
         github_request("POST", comments_url, {"body": body})
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")
-        write_summary(f"Commit comment publish failed: HTTP {exc.code}\n\n```\n{details}\n```")
+    except GitHubApiError as exc:
+        detail = f"\n\n```\n{exc.body}\n```" if exc.body else ""
+        write_summary(f"Commit comment publish failed.\n\n```\n{exc}\n```{detail}")
 
 
 def ensure_label(name: str, color: str, description: str) -> None:
     try:
         github_request("POST", repo_api_url("/labels"), {"name": name, "color": color, "description": description})
-    except urllib.error.HTTPError as exc:
+    except GitHubApiError as exc:
         if exc.code != 422:
             raise
 
@@ -81,3 +134,20 @@ def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None
                 github_request("PATCH", issue["url"], {"title": title, "body": body, "labels": labels})
                 return
     github_request("POST", repo_api_url("/issues"), {"title": title, "body": body, "labels": labels})
+
+
+def upsert_pull_request(title: str, body_content: str, head: str, base: str, labels: list[str] | None = None) -> dict:
+    pulls_url = repo_api_url("/pulls?state=open&per_page=100")
+    body = f"{FIX_PR_MARKER}\n{body_content}"
+    pulls = github_request("GET", pulls_url)
+    if isinstance(pulls, list):
+        for pr in pulls:
+            if pr.get("head", {}).get("ref") == head and pr.get("base", {}).get("ref") == base:
+                updated = github_request("PATCH", pr["url"], {"title": title, "body": body, "base": base})
+                if labels:
+                    github_request("PATCH", repo_api_url(f"/issues/{pr['number']}"), {"labels": labels})
+                return updated
+    created = github_request("POST", repo_api_url("/pulls"), {"title": title, "body": body, "head": head, "base": base})
+    if labels and created.get("number"):
+        github_request("PATCH", repo_api_url(f"/issues/{created['number']}"), {"labels": labels})
+    return created

@@ -10,6 +10,8 @@ This repository uses MiniMax through the OpenAI-compatible API for two GitHub Ac
 Configure these GitHub secrets:
 
 - `MINIMAX_API_KEY`
+- `AI_REVIEW_GH_TOKEN` optional but recommended for auto-fix PR creation when the default `GITHUB_TOKEN` cannot open pull requests
+- `AI_AUTOFIX_GITHUB_TOKEN` optional but recommended for auto-fix PR creation when the default `GITHUB_TOKEN` cannot open pull requests
 - `SMTP_HOST` for email notifications
 - `SMTP_PORT` optional if not using the default SMTP port
 - `SMTP_USERNAME`
@@ -55,6 +57,12 @@ Outputs:
 - upserted commit comment on the pushed SHA
 - best-effort AI auto-fix pull request when the report contains actionable issues
 - optional Chinese email notification after the coordinator job
+
+Auto-fix PR token selection order:
+
+1. `AI_REVIEW_GH_TOKEN`
+2. `AI_AUTOFIX_GITHUB_TOKEN`
+3. workflow `GITHUB_TOKEN`
 
 ## Scheduled Audit Workflow
 
@@ -113,6 +121,8 @@ The scheduled audit reads a curated repository snapshot focused on:
 - Push review keeps commit comments idempotent with a fixed marker.
 - Scheduled audit keeps a single reusable issue instead of opening duplicates.
 - Auto-fix only attempts bounded changes in already-reviewed text files and submits them through a PR instead of pushing directly to the target branch.
+- If auto-fix can push a branch but cannot open a PR, configure `AI_REVIEW_GH_TOKEN` or `AI_AUTOFIX_GITHUB_TOKEN`, or enable the repository setting that allows GitHub Actions to create pull requests.
+- A token that returns `403 Resource not accessible by personal access token` is missing `Pull requests: Read and write`.
 - If SMTP settings are missing, the review email job is skipped or fails clearly based on the configured recipient and SMTP secrets.
 
 ## Language And Email
