@@ -46,11 +46,14 @@ It uses a multi-agent pattern:
 3. `review-security`
 4. `review-docs-runtime`
 5. `review-coordinator`
+6. `auto-fix`
+7. `notify-email`
 
 Outputs:
 
 - GitHub Actions summary
 - upserted commit comment on the pushed SHA
+- best-effort AI auto-fix pull request when the report contains actionable issues
 - optional Chinese email notification after the coordinator job
 
 ## Scheduled Audit Workflow
@@ -109,6 +112,7 @@ The scheduled audit reads a curated repository snapshot focused on:
 - Coordinator jobs still generate a degraded summary when reviewer jobs fail.
 - Push review keeps commit comments idempotent with a fixed marker.
 - Scheduled audit keeps a single reusable issue instead of opening duplicates.
+- Auto-fix only attempts bounded changes in already-reviewed text files and submits them through a PR instead of pushing directly to the target branch.
 - If SMTP settings are missing, the review email job is skipped or fails clearly based on the configured recipient and SMTP secrets.
 
 ## Language And Email
@@ -118,6 +122,7 @@ The scheduled audit reads a curated repository snapshot focused on:
   - Actions summary
   - commit comment
   - optional email body
+- When auto-fix succeeds, the workflow will also try to open a Chinese PR containing the proposed repair.
 - Email subjects follow the format:
   - `【CTP代码审查】owner/repo@branch 审查完成`
 

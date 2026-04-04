@@ -9,6 +9,12 @@ REVIEWER_SYSTEM = (
     "绝不编造仓库快照中不存在的事实。"
 )
 
+FIXER_SYSTEM = (
+    "你是一名资深修复工程师。请基于审查结论直接生成可落地的修复方案。"
+    "必须使用简体中文。只修复有明确证据支持的问题，不得编造需求。"
+    "输出必须是合法 JSON，不要包裹 Markdown 代码块。"
+)
+
 
 def build_reviewer_prompt(role: str, payload: dict) -> str:
     files = "\n".join(f"- {path}" for path in payload.get("included_files", []))
@@ -95,5 +101,42 @@ def build_coordinate_prompt(kind: str, payload: dict, reviewer_results: list[dic
 
         Reviewer 输出:
         {joined}
+        """
+    ).strip()
+
+
+def build_fix_prompt(payload: dict, report_text: str, file_snapshots: list[dict]) -> str:
+    files_json = "\n\n".join(
+        f"### {item['path']}\n```text\n{item['content']}\n```" for item in file_snapshots
+    )
+    return textwrap.dedent(
+        f"""
+        你要根据下面的 AI 审查报告，对仓库进行一次“谨慎、自包含、最小必要”的自动修复。
+
+        约束：
+        1. 只允许修改已提供内容的文件。
+        2. 只修复审查报告中明确提到、且能从上下文确认的问题。
+        3. 不要做大规模重构，不要改业务语义，不要新增密钥。
+        4. 如果报告没有明确可自动修复的问题，请返回空变更。
+        5. 输出必须是 JSON，格式严格如下：
+        {{
+          "summary": "一句中文总结",
+          "changes": [
+            {{
+              "path": "相对路径",
+              "content": "该文件修复后的完整文本内容"
+            }}
+          ]
+        }}
+
+        仓库: {payload.get('repository')}
+        基线提交: {payload.get('base_sha')}
+        当前提交: {payload.get('head_sha')}
+
+        本次审查报告：
+        {report_text}
+
+        可修改文件当前内容：
+        {files_json}
         """
     ).strip()

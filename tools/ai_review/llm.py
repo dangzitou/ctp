@@ -37,3 +37,20 @@ def request_markdown(system_prompt: str, user_prompt: str, model: str) -> str:
     if not content:
         raise RuntimeError("The model response was empty.")
     return content
+
+
+def request_text(system_prompt: str, user_prompt: str, model: str, temperature: float = 0.2) -> str:
+    client = create_client()
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
+    )
+    message = response.choices[0].message.content if response.choices else ""
+    content = (message or "").strip()
+    if not content:
+        raise RuntimeError("The model response was empty.")
+    return content

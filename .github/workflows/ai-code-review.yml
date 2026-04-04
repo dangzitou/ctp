@@ -22,6 +22,7 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: ai-code-review-${{ github.ref }}
@@ -196,6 +197,7 @@ jobs:
     needs:
       - prepare-diff
       - review-coordinator
+      - auto-fix
     if: always() && github.actor != 'github-actions[bot]' && vars.AI_REVIEW_MAIL_TO != ''
     runs-on: ubuntu-latest
     env:
@@ -235,6 +237,8 @@ jobs:
             echo "Commit 链接: ${SERVER_URL}/${REPO}/commit/${SHA}"
             echo "Workflow 链接: ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}"
             echo
+            echo "自动修复状态: ${{ needs.auto-fix.result }}"
+            echo
             echo "以下为本次中文审查结果："
             echo
             cat .ai/final-review.md
@@ -251,3 +255,70 @@ jobs:
           --subject "【CTP代码审查】${{ github.repository }}@${{ github.ref_name }} 审查完成"
           --body-file .ai/review-email.txt
           --to "${{ vars.AI_REVIEW_MAIL_TO }}"
+
+  auto-fix:
+    needs:
+      - prepare-diff
+      - review-coordinator
+    if: needs.review-coordinator.result == 'success' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-final-report
+          path: .ai
+      - name: Run AI auto-fix
+        env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_BASE_URL: https://api.minimaxi.com/v1
+          OPENAI_MODEL: ${{ vars.AI_REVIEW_MODEL }}
+        run: >
+          python -m tools.ai_review.auto_fix apply
+          --input .ai/review-payload.json
+          --report .ai/final-review.md
+          --output .ai/auto-fix.json
+          --summary-output .ai/auto-fix-summary.md
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-auto-fix
+          path: |
+            .ai/auto-fix.json
+            .ai/auto-fix-summary.md
+          if-no-files-found: warn
+      - name: Create auto-fix pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore(ai): 自动修复审查发现的问题"
+          branch: "ai/auto-fix/${{ github.run_id }}"
+          delete-branch: true
+          title: "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}"
+          body: |
+            本 PR 由 AI 代码审查 workflow 自动生成，用于修复本次审查中识别出的明确问题。
+
+            来源：
+            - 仓库：`${{ github.repository }}`
+            - 分支：`${{ github.ref_name }}`
+            - 提交：`${{ github.sha }}`
+            - Workflow：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            说明：
+            - 仅尝试修复审查报告中有明确证据支持的问题
+            - 不直接修改主分支
+            - 如果没有生成有效改动，则不会创建 PR
+          base: ${{ github.ref_name }}
+          labels: |
+            automation
+            triage
+          branch-suffix: short-commit-hash
