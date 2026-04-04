@@ -441,6 +441,13 @@ workflow：
 ### 18.1 必填 Secrets
 
 - `MINIMAX_API_KEY`
+- `AI_REVIEW_GH_TOKEN`
+
+说明：
+
+- `AI_REVIEW_GH_TOKEN` 用于自动修复 PR 创建阶段
+- 如果仓库默认 `GITHUB_TOKEN` 不能创建 PR，优先配置这个 secret
+- 这个 token 需要至少具备 `Pull requests: Read and write`
 
 如果要用中文邮件通知，还要：
 
@@ -716,6 +723,13 @@ workflow：
 2. AI 生成了空修改
 3. 改动不在允许的文件集合里
 4. PR 创建权限不足
+
+重点检查：
+
+1. 是否已配置 `AI_REVIEW_GH_TOKEN`
+2. 该 token 是否具备 `Pull requests: Read and write`
+3. 如果不用专用 token，仓库是否已开启 `Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests`
+4. workflow 日志里如果出现 `403 Resource not accessible by personal access token`，说明当前 token 权限不足，不是 auto-fix 改文件失败
 
 ### 21.5 巡查 workflow 跑了但没有 Issue
 

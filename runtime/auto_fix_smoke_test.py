@@ -3,6 +3,7 @@
 API_KEY = "sk-test-hardcoded-demo-key"
 SECRET_TOKEN = "demo-hardcoded-token"
 ACCESS_KEY = "demo-access-key"
+DB_PASSWORD = "demo-db-password"
 
 
 def load_api_key() -> str:

@@ -85,6 +85,18 @@ def repo_api_url(path: str) -> str:
     return f"{api_base}/repos/{repo}{path}"
 
 
+def repo_html_url(path: str = "") -> str:
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+    server_url = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    if not repo:
+        raise RuntimeError("`GITHUB_REPOSITORY` is missing.")
+    return f"{server_url}/{repo}{path}"
+
+
+def compare_url(base: str, head: str) -> str:
+    return repo_html_url(f"/compare/{base}...{head}?expand=1")
+
+
 def upsert_commit_comment(review_body: str, head_sha: str) -> None:
     comments_url = repo_api_url(f"/commits/{head_sha}/comments")
     body = f"{COMMENT_MARKER}\n# AI Code Review\n\n{review_body}"
