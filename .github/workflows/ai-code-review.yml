@@ -339,10 +339,14 @@ jobs:
       - name: Create auto-fix pull request
         if: steps.prepare_fix_branch.outputs.changed == 'true'
         env:
+          AI_REVIEW_GH_TOKEN: ${{ secrets.AI_REVIEW_GH_TOKEN }}
+          AUTO_FIX_GITHUB_TOKEN: ${{ secrets.AI_AUTOFIX_GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          python -m tools.ai_review.open_fix_pr
-          --title "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}"
-          --body-file .ai/auto-fix-pr-body.md
-          --head "${{ steps.prepare_fix_branch.outputs.fix_branch }}"
-          --base "${{ github.ref_name }}"
+        shell: bash
+        run: |
+          export GITHUB_TOKEN="${AI_REVIEW_GH_TOKEN:-${AUTO_FIX_GITHUB_TOKEN:-$GITHUB_TOKEN}}"
+          python -m tools.ai_review.open_fix_pr \
+            --title "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}" \
+            --body-file .ai/auto-fix-pr-body.md \
+            --head "${{ steps.prepare_fix_branch.outputs.fix_branch }}" \
+            --base "${{ github.ref_name }}"

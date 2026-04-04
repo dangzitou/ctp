@@ -14,6 +14,43 @@ ISSUE_MARKER = "<!-- ai-repo-audit -->"
 FIX_PR_MARKER = "<!-- ai-auto-fix-pr -->"
 
 
+class GitHubApiError(RuntimeError):
+    def __init__(self, code: int, message: str, body: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.body = body
+
+
+def _http_error_details(exc: urllib.error.HTTPError) -> GitHubApiError:
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+    accepted = exc.headers.get("x-accepted-github-permissions", "").strip()
+    api_message = ""
+    if body:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {}
+        api_message = str(payload.get("message", "")).strip()
+
+    parts = [f"GitHub API request failed with HTTP {exc.code}: {exc.reason}."]
+    if api_message:
+        parts.append(api_message)
+    elif body:
+        parts.append(f"Response: {body}")
+    if accepted:
+        parts.append(f"Required permissions: `{accepted}`.")
+    if exc.code == 403 and api_message == "Resource not accessible by personal access token":
+        parts.append(
+            "The current token cannot create pull requests. "
+            "Configure repository secret `AI_REVIEW_GH_TOKEN` with `Pull requests: Read and write`, "
+            "or enable GitHub Actions to create pull requests for `GITHUB_TOKEN`."
+        )
+    return GitHubApiError(exc.code, " ".join(parts), body)
+
+
 def github_request(method: str, url: str, payload: dict | None = None) -> dict | list:
     token = os.getenv("GITHUB_TOKEN", "").strip()
     if not token:
@@ -31,10 +68,13 @@ def github_request(method: str, url: str, payload: dict | None = None) -> dict |
         headers["Content-Type"] = "application/json"
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        body = response.read().decode(charset)
-        return json.loads(body) if body else {}
+    try:
+        with urllib.request.urlopen(request) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            body = response.read().decode(charset)
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        raise _http_error_details(exc) from exc
 
 
 def repo_api_url(path: str) -> str:
@@ -57,15 +97,15 @@ def upsert_commit_comment(review_body: str, head_sha: str) -> None:
                     github_request("PATCH", comment["url"], {"body": body})
                     return
         github_request("POST", comments_url, {"body": body})
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")
-        write_summary(f"Commit comment publish failed: HTTP {exc.code}\n\n```\n{details}\n```")
+    except GitHubApiError as exc:
+        detail = f"\n\n```\n{exc.body}\n```" if exc.body else ""
+        write_summary(f"Commit comment publish failed.\n\n```\n{exc}\n```{detail}")
 
 
 def ensure_label(name: str, color: str, description: str) -> None:
     try:
         github_request("POST", repo_api_url("/labels"), {"name": name, "color": color, "description": description})
-    except urllib.error.HTTPError as exc:
+    except GitHubApiError as exc:
         if exc.code != 422:
             raise
 
