@@ -219,7 +219,7 @@ jobs:
           path: .ai/final-review.md
           if-no-files-found: warn
 
-  notify-email:
+  publish-review-issue:
     needs:
       - prepare-diff
       - review-coordinator
@@ -227,67 +227,29 @@ jobs:
     if: >
       always() &&
       github.actor != 'github-actions[bot]' &&
-      vars.AI_REVIEW_MAIL_TO != '' &&
       (
         github.event_name == 'workflow_dispatch' ||
         !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
       )
     runs-on: ubuntu-latest
-    env:
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-      SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
-      MAIL_FROM: ${{ vars.AI_REVIEW_MAIL_FROM }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai
       - uses: actions/download-artifact@v4
         with:
           name: review-final-report
           path: .ai
-      - name: Build Chinese email body
-        shell: bash
+      - name: Publish review issue
         env:
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          REF_NAME: ${{ github.ref_name }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          SERVER_URL: ${{ github.server_url }}
-          STATUS: ${{ needs.review-coordinator.result }}
-        run: |
-          {
-            echo "CTP AI 代码审查通知"
-            echo
-            echo "仓库: ${REPO}"
-            echo "分支: ${REF_NAME}"
-            echo "提交: ${SHA}"
-            echo "执行状态: ${STATUS}"
-            echo "Commit 链接: ${SERVER_URL}/${REPO}/commit/${SHA}"
-            echo "Workflow 链接: ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}"
-            echo
-            echo "自动修复状态: ${{ needs.auto-fix.result }}"
-            echo
-            echo "以下为本次中文审查结果："
-            echo
-            cat .ai/final-review.md
-          } > .ai/review-email.txt
-      - name: Check email configuration
-        shell: bash
-        run: |
-          [ -n "${SMTP_HOST}" ] || { echo "SMTP_HOST is not configured"; exit 1; }
-          [ -n "${SMTP_USERNAME}" ] || { echo "SMTP_USERNAME is not configured"; exit 1; }
-          [ -n "${SMTP_PASSWORD}" ] || { echo "SMTP_PASSWORD is not configured"; exit 1; }
-      - name: Send Chinese email
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
-          python -m tools.ai_review.send_email
-          --subject "【CTP代码审查】${{ github.repository }}@${{ github.ref_name }} 审查完成"
-          --body-file .ai/review-email.txt
-          --to "${{ vars.AI_REVIEW_MAIL_TO }}"
+          python -m tools.ai_review.publish_review_issue
+          --report-file .ai/final-review.md
+          --review-status "${{ needs.review-coordinator.result }}"
+          --auto-fix-status "${{ needs.auto-fix.result }}"
 
   auto-fix:
     needs:

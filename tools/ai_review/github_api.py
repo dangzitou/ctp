@@ -11,6 +11,7 @@ from .common import write_summary
 
 COMMENT_MARKER = "<!-- ai-commit-review -->"
 ISSUE_MARKER = "<!-- ai-repo-audit -->"
+REVIEW_ISSUE_MARKER = "<!-- ai-review-inbox -->"
 FIX_PR_MARKER = "<!-- ai-auto-fix-pr -->"
 
 
@@ -151,6 +152,20 @@ def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None
             current = issue.get("body", "")
             issue_labels = [label.get("name") for label in issue.get("labels", [])]
             if ISSUE_MARKER in current or (issue.get("title") == title and all(label in issue_labels for label in labels)):
+                github_request("PATCH", issue["url"], {"title": title, "body": body, "labels": labels})
+                return
+    github_request("POST", repo_api_url("/issues"), {"title": title, "body": body, "labels": labels})
+
+
+def upsert_review_issue(title: str, body_content: str, labels: list[str]) -> None:
+    body = f"{REVIEW_ISSUE_MARKER}\n# {title}\n\n{body_content}"
+    issues_url = repo_api_url("/issues?state=open&per_page=100")
+    issues = github_request("GET", issues_url)
+    if isinstance(issues, list):
+        for issue in issues:
+            current = issue.get("body", "")
+            issue_labels = [label.get("name") for label in issue.get("labels", [])]
+            if REVIEW_ISSUE_MARKER in current or (issue.get("title") == title and all(label in issue_labels for label in labels)):
                 github_request("PATCH", issue["url"], {"title": title, "body": body, "labels": labels})
                 return
     github_request("POST", repo_api_url("/issues"), {"title": title, "body": body, "labels": labels})

@@ -12,10 +12,6 @@ Configure these GitHub secrets:
 - `MINIMAX_API_KEY`
 - `AI_REVIEW_GH_TOKEN` optional but recommended for auto-fix PR creation when the default `GITHUB_TOKEN` cannot open pull requests
 - `AI_AUTOFIX_GITHUB_TOKEN` optional but recommended for auto-fix PR creation when the default `GITHUB_TOKEN` cannot open pull requests
-- `SMTP_HOST` for email notifications
-- `SMTP_PORT` optional if not using the default SMTP port
-- `SMTP_USERNAME`
-- `SMTP_PASSWORD`
 
 Optional GitHub repository variables:
 
@@ -23,10 +19,6 @@ Optional GitHub repository variables:
 - `AI_AUDIT_MODEL`: defaults to `MiniMax-M2.5`
 - `AI_REVIEW_MAX_FILES`: defaults to `12`
 - `AI_REVIEW_MAX_PATCH_CHARS`: defaults to `60000`
-- `AI_REVIEW_MAIL_TO`: recipient email for review notifications
-- `AI_REVIEW_MAIL_FROM`: optional sender address override
-- `SMTP_USE_TLS`: defaults to enabled
-
 The workflows set:
 
 - `OPENAI_API_KEY=${{ secrets.MINIMAX_API_KEY }}`
@@ -49,15 +41,15 @@ It uses a multi-agent pattern:
 4. `review-docs-runtime`
 5. `review-coordinator`
 6. `auto-fix`
-7. `notify-email`
+7. `publish-review-issue`
 
 Outputs:
 
 - GitHub Actions summary
 - upserted commit comment on the pushed SHA
+- one reusable GitHub issue titled `AI Code Review Inbox`
 - best-effort AI auto-fix pull request when the report contains actionable issues
 - automatic merge of the auto-fix PR when the token and branch policy allow it
-- optional Chinese email notification after the coordinator job
 
 Auto-fix PR token selection order:
 
@@ -126,21 +118,18 @@ The scheduled audit reads a curated repository snapshot focused on:
 - Pushes produced by the auto-fix merge commit are ignored by the review workflow to avoid self-trigger loops.
 - If auto-fix can push a branch but cannot open a PR, configure `AI_REVIEW_GH_TOKEN` or `AI_AUTOFIX_GITHUB_TOKEN`, or enable the repository setting that allows GitHub Actions to create pull requests.
 - A token that returns `403 Resource not accessible by personal access token` is missing `Pull requests: Read and write`.
-- If SMTP settings are missing, the review email job is skipped or fails clearly based on the configured recipient and SMTP secrets.
 
-## Language And Email
+## Language And Issue Output
 
 - Reviewer and coordinator prompts require Simplified Chinese output.
 - The same Chinese report is used for:
   - Actions summary
   - commit comment
-  - optional email body
+  - reusable review issue body
 - When auto-fix succeeds, the workflow also tries to open a Chinese PR containing the proposed repair.
-- Email subjects follow the format:
-  - `【CTP代码审查】owner/repo@branch 审查完成`
 
 ## Local Notes
 
 - The workflows run on GitHub-hosted runners, not on your local machine.
 - Local dry-run is possible only at script level.
-- Full behavior like commit comments, auto-fix PRs, audit issues, and emails requires GitHub Actions context.
+- Full behavior like commit comments, review issues, auto-fix PRs, and audit issues requires GitHub Actions context.

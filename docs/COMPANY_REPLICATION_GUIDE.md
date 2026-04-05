@@ -7,7 +7,7 @@
 - 你回到公司后，需要在 Mac 上复现这套系统
 - 你需要让同事按文档把系统重新搭起来
 - 你需要把真实公司 CTP 接口接进来
-- 你需要启用 GitHub 上的 AI 审查、自修复、定时巡查、邮件通知
+- 你需要启用 GitHub 上的 AI 审查、自修复、定时巡查、Issue 通知
 - 你需要知道“哪些点已经成功验证过，哪些点还要结合公司真实环境验证”
 
 ## 1. 本次已经完成的能力
@@ -25,7 +25,7 @@
 - GitHub 每天定时巡查一次
 - 审查结果写回 commit comment
 - 巡查结果写回固定 Issue
-- 审查结果支持中文邮件通知
+- 审查结果支持中文 Issue 汇总
 
 ## 2. 这次实施过程中已经确认成功的结果
 
@@ -34,7 +34,7 @@
 - MiniMax 多 Agent 代码审查 workflow 已部署到仓库并跑通过
 - MiniMax 定时巡查 workflow 已部署到仓库并跑通过
 - `main` 分支已经包含自动修复 PR 逻辑
-- `main` 分支已经包含中文邮件通知逻辑
+- `main` 分支已经包含中文审查 Issue 汇总逻辑
 - `main` 分支已经包含 front/auth 解耦逻辑
 - 相关文档已经全部写入仓库
 
@@ -43,7 +43,7 @@
 1. `a96516d` 多 Agent 审查与巡查 workflow
 2. `6d4823b` Mac Docker 部署说明与 dashboard HA
 3. `945505a` 可切换 CTP front 与认证解耦
-4. `e3d1c57` 中文邮件通知
+4. `e3d1c57` 中文通知链路
 5. `e013692` 自动修复 PR
 6. `aa096a2` 复现手册初版
 
@@ -56,7 +56,7 @@
 - 中文审查输出
 - 自动修复 PR 生成与自动合并机制
 - 定时巡查机制
-- 邮件发送脚本和 workflow 接线
+- 审查结果写入 Issue 的 workflow 接线
 
 ### 3.2 必须到公司环境再验证
 
@@ -112,7 +112,7 @@
 
 1. 先在 Mac 上跑 `sim` 模式，确认 Docker 栈健康
 2. 再确认 GitHub 的代码审查和巡查 workflow 可运行
-3. 再补 SMTP，确认能收到中文邮件
+3. 再确认 GitHub Issue 输出正常
 4. 再接入 Windows 真实中继
 5. 再接入公司 front 和公司认证
 6. 最后再验收真实数据流
@@ -385,14 +385,14 @@ workflow：
 4. `review-docs-runtime`
 5. `review-coordinator`
 6. `auto-fix`
-7. `notify-email`
+7. `publish-review-issue`
 
 输出：
 
 - 中文 Actions Summary
 - 中文 commit comment
+- 固定复用的中文 Review Issue
 - 自动修复 PR 与自动合并
-- 中文邮件
 
 ## 16. GitHub 定时巡查说明
 
@@ -442,23 +442,12 @@ workflow：
 
 - `MINIMAX_API_KEY`
 
-如果要用中文邮件通知，还要：
-
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_USERNAME`
-- `SMTP_PASSWORD`
-
 ### 18.2 推荐 Variables
 
 - `AI_REVIEW_MODEL`
 - `AI_AUDIT_MODEL`
 - `AI_REVIEW_MAX_FILES`
 - `AI_REVIEW_MAX_PATCH_CHARS`
-- `AI_REVIEW_MAIL_TO`
-- `AI_REVIEW_MAIL_FROM`
-- `SMTP_USE_TLS`
-
 ### 18.3 推荐默认值
 
 - `AI_REVIEW_MODEL=MiniMax-M2.5`
@@ -499,7 +488,7 @@ workflow：
 
 - `AI Code Review` workflow 绿色成功
 - commit 页面出现中文评论
-- 邮件能收到
+- 固定 Review Issue 被创建或更新
 
 ### 19.5 自动修复验收
 
@@ -642,17 +631,16 @@ workflow：
 - 不把它当功能错误
 - 只在团队明确要求统一换行时再处理
 
-### 20.10 GitHub Actions 邮件通知不是“天然就会发”
+### 20.10 GitHub Actions 审查结果默认改为写入 Issue
 
 问题：
 
-- GitHub Actions 本身不会直接替你发邮件
+- 邮件通知会把审查结果打散到邮箱里，后续检索和协作都不方便
 
 解决方案：
 
-- 新增 SMTP 配置
-- 新增 `send_email.py`
-- workflow 中加入 `notify-email` job
+- 审查 workflow 现在会把结果写到固定 Review Issue
+- 同时保留 commit comment，方便在提交页快速查看
 
 ### 20.11 自动修复不能无边界乱改
 
@@ -674,7 +662,7 @@ workflow：
 解决方案：
 
 - 统一改 reviewer/coordinator prompt
-- Summary、comment、email 都走中文
+- Summary、comment、issue 都走中文
 
 ## 21. 最常见故障排查
 
@@ -698,15 +686,13 @@ workflow：
 4. `MD_SERVER_HOST`、`MD_SERVER_PORT` 是否正确
 5. 认证字段是否正确
 
-### 21.3 审查 workflow 成功但没邮件
+### 21.3 审查 workflow 成功但没 Review Issue
 
 检查：
 
-1. `AI_REVIEW_MAIL_TO` 是否已配置
-2. `SMTP_HOST` 是否已配置
-3. `SMTP_USERNAME` 是否已配置
-4. `SMTP_PASSWORD` 是否已配置
-5. 邮箱是否允许 SMTP 登录
+1. `GITHUB_TOKEN` 是否具备 `issues: write`
+2. `publish-review-issue` job 是否执行成功
+3. 仓库 Issue 是否被过滤或折叠
 
 ### 21.4 自动修复没有创建 PR
 
@@ -736,7 +722,7 @@ workflow：
 5. 再接 Windows 中继
 6. 再写 Redis front/auth
 7. 再接真实公司接口
-8. 再做一次 push 验收审查、自修复、邮件
+8. 再做一次 push 验收审查、自修复、Issue 汇总
 
 ## 23. 最终上线建议
 
@@ -754,7 +740,7 @@ workflow：
 
 1. Mac 上先跑 `sim`
 2. GitHub 上确认审查、自修复、巡查都正常
-3. SMTP 配起来收中文邮件
+3. 确认固定 Review Issue 能正常更新
 4. Windows 侧跑真实行情中继
 5. Redis 写入公司 front 与认证
 6. 重启中继和 seed
