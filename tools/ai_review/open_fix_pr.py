@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .common import main_cli_error, write_summary
@@ -100,6 +101,10 @@ def main() -> None:
                 Path(args.json_output).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             except Exception as write_exc:
                 write_summary(f"写入 JSON 输出文件失败: {write_exc}")
+                try:
+                    print(f"ERROR: JSON 输出写入失败: {write_exc}", file=sys.stderr)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
