@@ -349,4 +349,12 @@ jobs:
             --title "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}" \
             --body-file .ai/auto-fix-pr-body.md \
             --head "${{ steps.prepare_fix_branch.outputs.fix_branch }}" \
-            --base "${{ github.ref_name }}"
+            --base "${{ github.ref_name }}" \
+            --merge-mode squash \
+            --json-output .ai/auto-fix-pr.json
+      - if: always() && steps.prepare_fix_branch.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-auto-fix-pr
+          path: .ai/auto-fix-pr.json
+          if-no-files-found: warn
