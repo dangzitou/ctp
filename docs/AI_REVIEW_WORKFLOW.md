@@ -69,7 +69,7 @@ Auto-fix PR token selection order:
 
 `ai-repo-audit.yml` runs on:
 
-- `schedule` every 6 hours
+- `schedule` once per day
 - manual `workflow_dispatch`
 
 It uses a second multi-agent pattern:
