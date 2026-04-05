@@ -77,6 +77,22 @@ def github_request(method: str, url: str, payload: dict | None = None) -> dict |
         raise _http_error_details(exc) from exc
 
 
+def github_graphql_request(query: str, variables: dict | None = None) -> dict:
+    api_base = os.getenv("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    graphql_url = f"{api_base}/graphql"
+    response = github_request("POST", graphql_url, {"query": query, "variables": variables or {}})
+    if not isinstance(response, dict):
+        raise RuntimeError("Unexpected GitHub GraphQL response type.")
+    errors = response.get("errors") or []
+    if errors:
+        messages = [str(item.get("message", "unknown GraphQL error")) for item in errors if isinstance(item, dict)]
+        raise RuntimeError("; ".join(messages) or "GitHub GraphQL request failed.")
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("GitHub GraphQL response missing `data`.")
+    return data
+
+
 def repo_api_url(path: str) -> str:
     repo = os.getenv("GITHUB_REPOSITORY", "").strip()
     api_base = os.getenv("GITHUB_API_URL", "https://api.github.com").rstrip("/")
@@ -95,6 +111,10 @@ def repo_html_url(path: str = "") -> str:
 
 def compare_url(base: str, head: str) -> str:
     return repo_html_url(f"/compare/{base}...{head}?expand=1")
+
+
+def pr_url(pr_number: int) -> str:
+    return repo_html_url(f"/pull/{pr_number}")
 
 
 def upsert_commit_comment(review_body: str, head_sha: str) -> None:
@@ -151,3 +171,23 @@ def upsert_pull_request(title: str, body_content: str, head: str, base: str, lab
     if labels and created.get("number"):
         github_request("PATCH", repo_api_url(f"/issues/{created['number']}"), {"labels": labels})
     return created
+
+
+def merge_pull_request(pr_number: int, merge_method: str = "squash") -> dict:
+    return github_request("PUT", repo_api_url(f"/pulls/{pr_number}/merge"), {"merge_method": merge_method})
+
+
+def enable_pull_request_auto_merge(pr_node_id: str, merge_method: str = "SQUASH") -> dict:
+    query = """
+    mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+      enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod}) {
+        pullRequest {
+          number
+          autoMergeRequest {
+            enabledAt
+          }
+        }
+      }
+    }
+    """
+    return github_graphql_request(query, {"pullRequestId": pr_node_id, "mergeMethod": merge_method})
