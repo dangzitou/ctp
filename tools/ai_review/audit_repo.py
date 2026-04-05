@@ -18,6 +18,67 @@ DEFAULT_MODEL = "MiniMax-M2.5"
 AUDIT_TITLE = "AI Repo Audit"
 
 
+def _format_lines(items: list[str], default: str, limit: int = 12) -> str:
+    lines = [f"- {item}" for item in items[:limit] if str(item).strip()]
+    return "\n".join(lines) or default
+
+
+def _format_issue_refs(items: list[dict], default: str, limit: int = 8) -> str:
+    lines = []
+    for item in items[:limit]:
+        number = item.get("number", "?")
+        title = str(item.get("title", "")).strip() or "untitled"
+        state = str(item.get("state", "unknown")).strip()
+        updated_at = str(item.get("updated_at", "")).strip()
+        lines.append(f"- `#{number}` {title} (`{state}`{f', {updated_at}' if updated_at else ''})")
+    return "\n".join(lines) or default
+
+
+def _format_run_refs(items: list[dict], default: str, limit: int = 6) -> str:
+    lines = []
+    for item in items[:limit]:
+        name = str(item.get("name", "workflow")).strip()
+        conclusion = str(item.get("conclusion", "unknown")).strip()
+        branch = str(item.get("head_branch", "")).strip()
+        created_at = str(item.get("created_at", "")).strip()
+        detail = ", ".join(part for part in [branch, created_at] if part)
+        suffix = f" ({detail})" if detail else ""
+        lines.append(f"- `{name}` -> `{conclusion}`{suffix}")
+    return "\n".join(lines) or default
+
+
+def _context_evidence_section(context: dict) -> str:
+    related_files = context.get("related_files") or context.get("included_files") or []
+    related_issues = context.get("related_issues") or context.get("recent_issues") or []
+    related_prs = context.get("related_prs") or []
+    recent_failed_runs = context.get("recent_failed_runs") or []
+    degraded_reasons = context.get("degraded_reasons") or []
+
+    related_file_lines = _format_lines([f"`{path}`" for path in related_files], "- None")
+    related_issue_lines = _format_issue_refs(related_issues, "- None")
+    related_pr_lines = _format_issue_refs(related_prs, "- None")
+    failed_run_lines = _format_run_refs(recent_failed_runs, "- None")
+    degraded_lines = _format_lines(degraded_reasons, "- None", limit=10)
+
+    return (
+        "## 仓库上下文证据\n"
+        f"- MCP 启用: `{context.get('mcp_enabled', False)}`\n"
+        f"- MCP 来源: `{', '.join(context.get('mcp_sources', [])) or 'none'}`\n"
+        f"- 上下文包大小: `{context.get('context_bundle_size', 0)}`\n"
+        f"- 上下文降级: `{context.get('degraded', False)}`\n\n"
+        "### Related Files\n"
+        f"{related_file_lines}\n\n"
+        "### Related Issues\n"
+        f"{related_issue_lines}\n\n"
+        "### Related PRs\n"
+        f"{related_pr_lines}\n\n"
+        "### Recent Failed Runs\n"
+        f"{failed_run_lines}\n\n"
+        "### Degraded Reasons\n"
+        f"{degraded_lines}\n"
+    )
+
+
 def _load_payload(input_path: str, context_path: str | None = None) -> dict:
     payload = read_json(input_path)
     if context_path and os.path.exists(context_path):
@@ -114,7 +175,9 @@ def coordinate(input_path: str, outputs: list[str], strict: bool, report_output:
         ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
         ensure_label("automation", "5319e7", "Automation-generated issue")
         ensure_label("triage", "d4c5f9", "Needs triage")
-        audit_body = f"{render_timestamp_lines('巡查完成时间')}\n\n{final_report}"
+        context = payload.get("mcp_context", {}) if isinstance(payload.get("mcp_context"), dict) else {}
+        evidence = _context_evidence_section(context)
+        audit_body = f"{render_timestamp_lines('Audit completed')}\n\n{evidence}\n\n{final_report}"
         upsert_audit_issue(AUDIT_TITLE, audit_body, ["ai-audit", "automation", "triage"])
 
     write_summary(f"## AI 仓库巡查\n\n巡查模型: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")

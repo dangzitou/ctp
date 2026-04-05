@@ -95,9 +95,9 @@ workflow 里会注入：
 
 ## Repo Audit Workflow
 
-[ai-repo-audit.yml](../.github/workflows/ai-repo-audit.yml) 当前每天一次：
+[ai-repo-audit.yml](../.github/workflows/ai-repo-audit.yml) 当前每 6 小时一次：
 
-- cron: `0 0 * * *`
+- cron: `0 */6 * * *`
 
 job 顺序：
 

@@ -117,9 +117,9 @@ auto-merge 的前提：
 
 ## 7. 定时巡查
 
-`AI Repo Audit` 当前是每天一次：
+`AI Repo Audit` 当前是每 6 小时一次：
 
-- cron: `0 0 * * *`
+- cron: `0 */6 * * *`
 
 它固定对 `main` 做巡查，避免手动触发时跑偏分支。
 
