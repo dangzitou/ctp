@@ -15,19 +15,19 @@
 
 ## 2. 关键文件
 
-- [ai-code-review.yml](/e:/Develop/projects/ctp/.github/workflows/ai-code-review.yml)
-- [ai-repo-audit.yml](/e:/Develop/projects/ctp/.github/workflows/ai-repo-audit.yml)
-- [policy.json](/e:/Develop/projects/ctp/tools/ai_review/policy.json)
-- [policy.py](/e:/Develop/projects/ctp/tools/ai_review/policy.py)
-- [review_push.py](/e:/Develop/projects/ctp/tools/ai_review/review_push.py)
-- [auto_fix.py](/e:/Develop/projects/ctp/tools/ai_review/auto_fix.py)
-- [validate_auto_fix.py](/e:/Develop/projects/ctp/tools/ai_review/validate_auto_fix.py)
-- [build_audit_artifact.py](/e:/Develop/projects/ctp/tools/ai_review/build_audit_artifact.py)
-- [publish_review_issue.py](/e:/Develop/projects/ctp/tools/ai_review/publish_review_issue.py)
+- [ai-code-review.yml](../.github/workflows/ai-code-review.yml)
+- [ai-repo-audit.yml](../.github/workflows/ai-repo-audit.yml)
+- [policy.json](../tools/ai_review/policy.json)
+- [policy.py](../tools/ai_review/policy.py)
+- [review_push.py](../tools/ai_review/review_push.py)
+- [auto_fix.py](../tools/ai_review/auto_fix.py)
+- [validate_auto_fix.py](../tools/ai_review/validate_auto_fix.py)
+- [build_audit_artifact.py](../tools/ai_review/build_audit_artifact.py)
+- [publish_review_issue.py](../tools/ai_review/publish_review_issue.py)
 
 ## 3. 当前策略
 
-策略定义在 [policy.json](/e:/Develop/projects/ctp/tools/ai_review/policy.json)。
+策略定义在 [policy.json](../tools/ai_review/policy.json)。
 
 当前默认规则：
 
@@ -78,7 +78,7 @@
 
 ## 5. 验证门禁
 
-门禁统一由 [validate_auto_fix.py](/e:/Develop/projects/ctp/tools/ai_review/validate_auto_fix.py) 执行。
+门禁统一由 [validate_auto_fix.py](../tools/ai_review/validate_auto_fix.py) 执行。
 
 当前门禁包括：
 
