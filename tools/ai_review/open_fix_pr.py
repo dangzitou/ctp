@@ -96,7 +96,10 @@ def main() -> None:
         print(fallback_url)
     finally:
         if args.json_output:
-            Path(args.json_output).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            try:
+                Path(args.json_output).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except Exception as write_exc:
+                write_summary(f"写入 JSON 输出文件失败: {write_exc}")
 
 
 if __name__ == "__main__":
