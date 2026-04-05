@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .common import env_int, run_git
+from .policy import should_auto_fix_path, should_review_path
 
 
 TEXT_EXTENSIONS = {
@@ -29,6 +30,8 @@ def should_review(path: str) -> bool:
     normalized = path.replace("\\", "/")
     if not normalized:
         return False
+    if not should_review_path(normalized):
+        return False
     if any(normalized.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
         return False
     if any(normalized.endswith(suffix) for suffix in EXCLUDED_SUFFIXES):
@@ -47,9 +50,7 @@ def should_auto_fix(path: str) -> bool:
     normalized = path.replace("\\", "/")
     if not should_review(normalized):
         return False
-    if normalized.startswith(".github/workflows/"):
-        return False
-    return True
+    return should_auto_fix_path(normalized)
 
 
 def collect_changed_files(base_sha: str, head_sha: str) -> list[str]:

@@ -1,0 +1,86 @@
+{
+  "default_risk": "medium_risk",
+  "rules": [
+    {
+      "name": "workflow-files",
+      "patterns": [
+        ".github/workflows/**"
+      ],
+      "risk": "high_risk",
+      "review_allowed": true,
+      "auto_fix_allowed": false,
+      "auto_merge_allowed": false,
+      "gates": []
+    },
+    {
+      "name": "ctp-runtime-and-auth",
+      "patterns": [
+        "runtime/front_config.py",
+        "runtime/md_simnow/**",
+        "runtime/md_tts/**",
+        "runtime/td_tts/**",
+        "runtime/dashboard/ctp_bridge.py",
+        "docker_ctp/seed/ctp_seed.py",
+        "docker_ctp/seed/ha_seed.py",
+        "docker_ctp/docker-compose.yml",
+        "docker_ctp/docker-compose.ha.yml",
+        "docker_ctp/start.sh",
+        "java_ctp_md/src/main/java/com/ctp/market/**"
+      ],
+      "risk": "high_risk",
+      "review_allowed": true,
+      "auto_fix_allowed": false,
+      "auto_merge_allowed": false,
+      "gates": [
+        "python_compile",
+        "java_compile",
+        "docker_compose_config"
+      ]
+    },
+    {
+      "name": "docs-and-low-risk-config",
+      "patterns": [
+        "docs/**",
+        "README.md",
+        "**/*.md",
+        ".gitignore",
+        ".gitattributes",
+        ".editorconfig",
+        "*.json",
+        "*.toml"
+      ],
+      "risk": "low_risk",
+      "review_allowed": true,
+      "auto_fix_allowed": true,
+      "auto_merge_allowed": true,
+      "gates": [
+        "markdown_links"
+      ]
+    },
+    {
+      "name": "application-code",
+      "patterns": [
+        "tools/ai_review/**",
+        "runtime/**/*.py",
+        "docker_ctp/**/*.py",
+        "docker_ctp/**/Dockerfile",
+        "java_ctp_md/**/*.java",
+        "java_ctp_md/pom.xml"
+      ],
+      "risk": "medium_risk",
+      "review_allowed": true,
+      "auto_fix_allowed": false,
+      "auto_merge_allowed": false,
+      "gates": [
+        "python_compile",
+        "java_compile",
+        "docker_compose_config"
+      ]
+    }
+  ],
+  "risk_priority": {
+    "low_risk": 1,
+    "medium_risk": 2,
+    "high_risk": 3
+  }
+}

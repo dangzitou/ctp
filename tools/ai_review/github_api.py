@@ -159,6 +159,22 @@ def _fetch_all_open_issues(url_template: str, per_page: int = 100) -> list:
     return all_issues
 
 
+def _fetch_paginated(url_template: str, per_page: int = 100, page_limit: int = 5) -> list:
+    items = []
+    page = 1
+    while page <= page_limit:
+        separator = "&" if "?" in url_template else "?"
+        url = f"{url_template}{separator}page={page}&per_page={per_page}"
+        payload = github_request("GET", url)
+        if not isinstance(payload, list) or not payload:
+            break
+        items.extend(payload)
+        if len(payload) < per_page:
+            break
+        page += 1
+    return items
+
+
 def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None:
     body = f"{ISSUE_MARKER}\n# {title}\n\n{body_content}"
     issues_url = repo_api_url("/issues?state=open")
@@ -229,3 +245,36 @@ def enable_pull_request_auto_merge(pr_node_id: str, merge_method: str = "SQUASH"
     if not pull_request:
         raise RuntimeError("GitHub GraphQL enablePullRequestAutoMerge response missing pullRequest.")
     return mutation_result
+
+
+def list_repo_issues(state: str = "all", labels: list[str] | None = None, since: str | None = None, per_page: int = 50) -> list[dict]:
+    query = [f"state={state}"]
+    if labels:
+        query.append("labels=" + ",".join(labels))
+    if since:
+        query.append(f"since={since}")
+    issues = _fetch_paginated(repo_api_url("/issues?" + "&".join(query)), per_page=per_page)
+    return [item for item in issues if "pull_request" not in item]
+
+
+def list_repo_pulls(state: str = "all", per_page: int = 50) -> list[dict]:
+    return _fetch_paginated(repo_api_url(f"/pulls?state={state}"), per_page=per_page)
+
+
+def list_commit_check_runs(ref: str) -> list[dict]:
+    response = github_request("GET", repo_api_url(f"/commits/{ref}/check-runs"))
+    if not isinstance(response, dict):
+        return []
+    runs = response.get("check_runs")
+    return runs if isinstance(runs, list) else []
+
+
+def list_workflow_runs(status: str | None = None, per_page: int = 30) -> list[dict]:
+    url = repo_api_url("/actions/runs")
+    if status:
+        url += f"?status={status}"
+    response = github_request("GET", f"{url}{'&' if '?' in url else '?'}per_page={per_page}")
+    if not isinstance(response, dict):
+        return []
+    runs = response.get("workflow_runs")
+    return runs if isinstance(runs, list) else []

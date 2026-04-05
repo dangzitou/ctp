@@ -8,9 +8,10 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read
 
 concurrency:
-  group: ai-repo-audit-${{ github.ref }}
+  group: ai-repo-audit-main
   cancel-in-progress: false
 
 jobs:
@@ -20,100 +21,160 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - run: python -m tools.ai_review.audit_repo prepare --output .ai/audit-payload.json
       - uses: actions/upload-artifact@v4
         with:
           name: audit-payload
           path: .ai/audit-payload.json
 
-  audit-operations:
+  prepare-mcp-context:
     needs: prepare-snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai pyyaml uv
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-payload
+          path: .ai
+      - name: Build MCP audit context
+        env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_REVIEW_GH_TOKEN: ${{ secrets.AI_REVIEW_GH_TOKEN }}
+          AI_REVIEW_ENABLE_MCP: ${{ vars.AI_REVIEW_ENABLE_MCP || 'true' }}
+          AI_REVIEW_MCP_MODE: ${{ vars.AI_REVIEW_MCP_MODE || 'prefetch' }}
+          AI_REVIEW_MCP_ISSUE_LOOKBACK_DAYS: ${{ vars.AI_REVIEW_MCP_ISSUE_LOOKBACK_DAYS || '30' }}
+          AI_REVIEW_MCP_PR_LOOKBACK_DAYS: ${{ vars.AI_REVIEW_MCP_PR_LOOKBACK_DAYS || '30' }}
+          AI_REVIEW_MCP_ENABLE_WEB_SEARCH: ${{ vars.AI_REVIEW_MCP_ENABLE_WEB_SEARCH || 'true' }}
+        run: python -m tools.ai_review.mcp_context audit --input .ai/audit-payload.json --output .ai/repo-audit-context.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-context
+          path: .ai/repo-audit-context.json
+          if-no-files-found: warn
+
+  audit-operations:
+    needs:
+      - prepare-snapshot
+      - prepare-mcp-context
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: audit-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-context
           path: .ai
       - env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
-        run: python -m tools.ai_review.audit_repo review --role operations --input .ai/audit-payload.json --output .ai/audit-operations.json --strict
+        run: python -m tools.ai_review.audit_repo review --role operations --input .ai/audit-payload.json --context .ai/repo-audit-context.json --output .ai/audit-operations.json --strict
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-operations
           path: .ai/audit-operations.json
+          if-no-files-found: warn
 
   audit-code-health:
-    needs: prepare-snapshot
+    needs:
+      - prepare-snapshot
+      - prepare-mcp-context
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: audit-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-context
           path: .ai
       - env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
-        run: python -m tools.ai_review.audit_repo review --role code-health --input .ai/audit-payload.json --output .ai/audit-code-health.json --strict
+        run: python -m tools.ai_review.audit_repo review --role code-health --input .ai/audit-payload.json --context .ai/repo-audit-context.json --output .ai/audit-code-health.json --strict
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-code-health
           path: .ai/audit-code-health.json
+          if-no-files-found: warn
 
   audit-workflow-release:
-    needs: prepare-snapshot
+    needs:
+      - prepare-snapshot
+      - prepare-mcp-context
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: audit-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-context
           path: .ai
       - env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
-        run: python -m tools.ai_review.audit_repo review --role workflow-release --input .ai/audit-payload.json --output .ai/audit-workflow-release.json --strict
+        run: python -m tools.ai_review.audit_repo review --role workflow-release --input .ai/audit-payload.json --context .ai/repo-audit-context.json --output .ai/audit-workflow-release.json --strict
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-workflow-release
           path: .ai/audit-workflow-release.json
+          if-no-files-found: warn
 
   audit-coordinator:
     needs:
       - prepare-snapshot
+      - prepare-mcp-context
       - audit-operations
       - audit-code-health
       - audit-workflow-release
@@ -123,10 +184,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           path: .ai-artifacts
@@ -135,10 +197,12 @@ jobs:
         run: |
           mkdir -p .ai
           cp .ai-artifacts/audit-payload/audit-payload.json .ai/audit-payload.json
+          cp .ai-artifacts/audit-context/repo-audit-context.json .ai/repo-audit-context.json
           [ -f .ai-artifacts/audit-operations/audit-operations.json ] && cp .ai-artifacts/audit-operations/audit-operations.json .ai/audit-operations.json || true
           [ -f .ai-artifacts/audit-code-health/audit-code-health.json ] && cp .ai-artifacts/audit-code-health/audit-code-health.json .ai/audit-code-health.json || true
           [ -f .ai-artifacts/audit-workflow-release/audit-workflow-release.json ] && cp .ai-artifacts/audit-workflow-release/audit-workflow-release.json .ai/audit-workflow-release.json || true
-      - env:
+      - name: Run audit coordinator
+        env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_AUDIT_MODEL }}
@@ -146,7 +210,29 @@ jobs:
         run: >
           python -m tools.ai_review.audit_repo coordinate
           --input .ai/audit-payload.json
+          --context .ai/repo-audit-context.json
           --review .ai/audit-operations.json
           --review .ai/audit-code-health.json
           --review .ai/audit-workflow-release.json
+          --output-report .ai/final-audit.md
           --strict
+      - name: Build structured repo audit artifact
+        if: always()
+        run: >
+          python -m tools.ai_review.build_audit_artifact audit
+          --payload .ai/audit-payload.json
+          --context .ai/repo-audit-context.json
+          --review .ai/audit-operations.json
+          --review .ai/audit-code-health.json
+          --review .ai/audit-workflow-release.json
+          --report .ai/final-audit.md
+          --output .ai/repo-audit.json
+      - if: always() && vars.AI_REVIEW_AUDIT_ARTIFACT != 'false' && vars.AI_REVIEW_AUDIT_ARTIFACT != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-audit
+          path: |
+            .ai/repo-audit.json
+            .ai/repo-audit-context.json
+            .ai/final-audit.md
+          if-no-files-found: warn

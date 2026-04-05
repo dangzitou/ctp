@@ -23,6 +23,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  actions: read
 
 concurrency:
   group: ai-code-review-${{ github.ref }}
@@ -34,43 +35,71 @@ jobs:
       github.actor != 'github-actions[bot]' &&
       (
         github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+        (
+          !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复') &&
+          !startsWith(github.event.head_commit.message, 'AI 自动修复:') &&
+          !startsWith(github.event.head_commit.message, 'chore(ai): auto-fix')
+        )
       )
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install review dependencies
-        run: python -m pip install --upgrade pip openai
-
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - name: Prepare review payload
         env:
           AI_REVIEW_MAX_FILES: ${{ vars.AI_REVIEW_MAX_FILES }}
           AI_REVIEW_MAX_PATCH_CHARS: ${{ vars.AI_REVIEW_MAX_PATCH_CHARS }}
         run: python -m tools.ai_review.review_push prepare --output .ai/review-payload.json
-
-      - name: Upload review payload
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: review-payload
           path: .ai/review-payload.json
 
-  review-code:
+  prepare-mcp-context:
     needs: prepare-diff
-    if: >
-      github.actor != 'github-actions[bot]' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
-      )
+    if: needs.prepare-diff.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai pyyaml uv
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-payload
+          path: .ai
+      - name: Build MCP review context
+        env:
+          OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_REVIEW_GH_TOKEN: ${{ secrets.AI_REVIEW_GH_TOKEN }}
+          AI_REVIEW_ENABLE_MCP: ${{ vars.AI_REVIEW_ENABLE_MCP || 'true' }}
+          AI_REVIEW_MCP_MODE: ${{ vars.AI_REVIEW_MCP_MODE || 'prefetch' }}
+          AI_REVIEW_MCP_RELATED_FILE_LIMIT: ${{ vars.AI_REVIEW_MCP_RELATED_FILE_LIMIT || '12' }}
+          AI_REVIEW_MCP_ISSUE_LOOKBACK_DAYS: ${{ vars.AI_REVIEW_MCP_ISSUE_LOOKBACK_DAYS || '30' }}
+          AI_REVIEW_MCP_PR_LOOKBACK_DAYS: ${{ vars.AI_REVIEW_MCP_PR_LOOKBACK_DAYS || '30' }}
+          AI_REVIEW_MCP_ENABLE_WEB_SEARCH: ${{ vars.AI_REVIEW_MCP_ENABLE_WEB_SEARCH || 'true' }}
+        run: python -m tools.ai_review.mcp_context review --input .ai/review-payload.json --output .ai/review-context.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-context
+          path: .ai/review-context.json
+          if-no-files-found: warn
+
+  review-code:
+    needs:
+      - prepare-diff
+      - prepare-mcp-context
+    if: needs.prepare-diff.result == 'success'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -80,31 +109,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: review-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-context
           path: .ai
       - name: Run code reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_REVIEW_MODEL }}
-        run: python -m tools.ai_review.review_push review --role code --input .ai/review-payload.json --output .ai/review-code.json --strict
+        run: python -m tools.ai_review.review_push review --role code --input .ai/review-payload.json --context .ai/review-context.json --output .ai/review-code.json --strict
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: review-code
           path: .ai/review-code.json
+          if-no-files-found: warn
 
   review-security:
-    needs: prepare-diff
-    if: >
-      github.actor != 'github-actions[bot]' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
-      )
+    needs:
+      - prepare-diff
+      - prepare-mcp-context
+    if: needs.prepare-diff.result == 'success'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -114,31 +145,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: review-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-context
           path: .ai
       - name: Run security reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_REVIEW_MODEL }}
-        run: python -m tools.ai_review.review_push review --role security --input .ai/review-payload.json --output .ai/review-security.json --strict
+        run: python -m tools.ai_review.review_push review --role security --input .ai/review-payload.json --context .ai/review-context.json --output .ai/review-security.json --strict
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: review-security
           path: .ai/review-security.json
+          if-no-files-found: warn
 
   review-docs-runtime:
-    needs: prepare-diff
-    if: >
-      github.actor != 'github-actions[bot]' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
-      )
+    needs:
+      - prepare-diff
+      - prepare-mcp-context
+    if: needs.prepare-diff.result == 'success'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -148,36 +181,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: review-payload
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-context
           path: .ai
       - name: Run docs/runtime reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
           OPENAI_MODEL: ${{ vars.AI_REVIEW_MODEL }}
-        run: python -m tools.ai_review.review_push review --role docs-runtime --input .ai/review-payload.json --output .ai/review-docs-runtime.json --strict
+        run: python -m tools.ai_review.review_push review --role docs-runtime --input .ai/review-payload.json --context .ai/review-context.json --output .ai/review-docs-runtime.json --strict
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: review-docs-runtime
           path: .ai/review-docs-runtime.json
+          if-no-files-found: warn
 
   review-coordinator:
     needs:
       - prepare-diff
+      - prepare-mcp-context
       - review-code
       - review-security
       - review-docs-runtime
-    if: >
-      always() &&
-      github.actor != 'github-actions[bot]' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
-      )
+    if: always() && needs.prepare-diff.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -186,7 +219,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           path: .ai-artifacts
@@ -195,6 +228,7 @@ jobs:
         run: |
           mkdir -p .ai
           cp .ai-artifacts/review-payload/review-payload.json .ai/review-payload.json
+          cp .ai-artifacts/review-context/review-context.json .ai/review-context.json
           [ -f .ai-artifacts/review-code/review-code.json ] && cp .ai-artifacts/review-code/review-code.json .ai/review-code.json || true
           [ -f .ai-artifacts/review-security/review-security.json ] && cp .ai-artifacts/review-security/review-security.json .ai/review-security.json || true
           [ -f .ai-artifacts/review-docs-runtime/review-docs-runtime.json ] && cp .ai-artifacts/review-docs-runtime/review-docs-runtime.json .ai/review-docs-runtime.json || true
@@ -207,6 +241,7 @@ jobs:
         run: >
           python -m tools.ai_review.review_push coordinate
           --input .ai/review-payload.json
+          --context .ai/review-context.json
           --review .ai/review-code.json
           --review .ai/review-security.json
           --review .ai/review-docs-runtime.json
@@ -219,49 +254,12 @@ jobs:
           path: .ai/final-review.md
           if-no-files-found: warn
 
-  publish-review-issue:
+  validate-auto-fix:
     needs:
       - prepare-diff
+      - prepare-mcp-context
       - review-coordinator
-      - auto-fix
-    if: >
-      always() &&
-      github.actor != 'github-actions[bot]' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
-      )
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
-      - uses: actions/download-artifact@v4
-        with:
-          name: review-final-report
-          path: .ai
-      - name: Publish review issue
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          python -m tools.ai_review.publish_review_issue
-          --report-file .ai/final-review.md
-          --review-status "${{ needs.review-coordinator.result }}"
-          --auto-fix-status "${{ needs.auto-fix.result }}"
-
-  auto-fix:
-    needs:
-      - prepare-diff
-      - review-coordinator
-    if: >
-      needs.review-coordinator.result == 'success' &&
-      github.actor != 'github-actions[bot]' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
-      )
+    if: always() && needs.prepare-diff.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -270,16 +268,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip openai
+      - run: python -m pip install --upgrade pip openai pyyaml uv
       - uses: actions/download-artifact@v4
         with:
           name: review-payload
           path: .ai
       - uses: actions/download-artifact@v4
         with:
+          name: review-context
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
           name: review-final-report
           path: .ai
       - name: Run AI auto-fix
+        if: needs.review-coordinator.result == 'success'
         env:
           OPENAI_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENAI_BASE_URL: https://api.minimaxi.com/v1
@@ -287,10 +290,44 @@ jobs:
         run: >
           python -m tools.ai_review.auto_fix apply
           --input .ai/review-payload.json
+          --context .ai/review-context.json
           --report .ai/final-review.md
           --output .ai/auto-fix.json
           --summary-output .ai/auto-fix-summary.md
-      - if: always()
+      - name: Create degraded auto-fix metadata when review failed
+        if: needs.review-coordinator.result != 'success'
+        shell: bash
+        run: |
+          mkdir -p .ai
+          cat > .ai/auto-fix.json <<'JSON'
+          {
+            "ok": false,
+            "changed": false,
+            "summary": "自动修复未执行：review-coordinator 未成功。",
+            "root_cause_guess": "",
+            "evidence_sources": [],
+            "changes": [],
+            "changed_files": [],
+            "risk_level": "",
+            "auto_fix_allowed": false,
+            "auto_merge_allowed": false,
+            "blocked_reason": "review-coordinator failed",
+            "reason": "review-coordinator failed",
+            "blocked_auto_fix_paths": [],
+            "blocked_auto_merge_paths": [],
+            "path_policies": [],
+            "gates": []
+          }
+          JSON
+          printf "自动修复未执行：review-coordinator 未成功。\n" > .ai/auto-fix-summary.md
+      - name: Validate auto-fix gates
+        continue-on-error: true
+        run: >
+          python -m tools.ai_review.validate_auto_fix run
+          --fix .ai/auto-fix.json
+          --output .ai/auto-fix-validation.json
+      - name: Upload auto-fix artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: review-auto-fix
@@ -298,6 +335,40 @@ jobs:
             .ai/auto-fix.json
             .ai/auto-fix-summary.md
           if-no-files-found: warn
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-auto-fix-validation
+          path: .ai/auto-fix-validation.json
+          if-no-files-found: warn
+
+  auto-fix:
+    needs:
+      - prepare-diff
+      - prepare-mcp-context
+      - review-coordinator
+      - validate-auto-fix
+    if: always() && needs.prepare-diff.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai pyyaml uv
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-auto-fix
+          path: .ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-auto-fix-validation
+          path: .ai
+      - name: Materialize auto-fix changes
+        shell: bash
+        run: python -m tools.ai_review.auto_fix materialize --input .ai/auto-fix.json
       - name: Prepare auto-fix branch
         id: prepare_fix_branch
         shell: bash
@@ -311,7 +382,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$FIX_BRANCH"
           git add -A
-          git commit -m "chore(ai): 自动修复审查发现的问题"
+          git commit -m "chore(ai): 自动修复 review 发现的问题"
           git push --force origin "$FIX_BRANCH"
           {
             echo "changed=true"
@@ -330,13 +401,18 @@ jobs:
             echo "- 提交：\`${GITHUB_SHA}\`"
             echo "- Workflow：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo
-            echo "说明："
-            echo "- 仅尝试修复审查报告中有明确证据支持的问题"
-            echo "- 不直接修改目标分支"
-            echo "- 如果没有生成有效改动，则不会创建 PR"
-            echo
             cat .ai/auto-fix-summary.md
+            echo
+            echo "验证门禁摘要："
+            python -c "import json, pathlib; payload=json.loads(pathlib.Path('.ai/auto-fix-validation.json').read_text(encoding='utf-8')); print(f\"- 风险等级：`{payload.get('risk_level', 'unknown')}`\"); print(f\"- 允许自动合并：`{payload.get('auto_merge_allowed', False)}`\"); print(f\"- 原因：{payload.get('reason', '')}\")"
           } > .ai/auto-fix-pr-body.md
+      - name: Decide merge mode
+        if: steps.prepare_fix_branch.outputs.changed == 'true'
+        id: decide_merge_mode
+        shell: bash
+        run: |
+          python -c "import json, pathlib; payload=json.loads(pathlib.Path('.ai/auto-fix-validation.json').read_text(encoding='utf-8')); pathlib.Path('.ai/merge-mode.txt').write_text(('squash' if payload.get('auto_merge_allowed') else 'none') + '\n', encoding='utf-8')"
+          echo "merge_mode=$(cat .ai/merge-mode.txt)" >> "$GITHUB_OUTPUT"
       - name: Create auto-fix pull request
         if: steps.prepare_fix_branch.outputs.changed == 'true'
         env:
@@ -347,15 +423,95 @@ jobs:
         run: |
           export GITHUB_TOKEN="${AI_REVIEW_GH_TOKEN:-${AUTO_FIX_GITHUB_TOKEN:-$GITHUB_TOKEN}}"
           python -m tools.ai_review.open_fix_pr \
-            --title "AI 自动修复: ${{ github.ref_name }} @ ${{ github.sha }}" \
+            --title "chore(ai): 自动修复 ${GITHUB_REF_NAME} @ ${GITHUB_SHA}" \
             --body-file .ai/auto-fix-pr-body.md \
             --head "${{ steps.prepare_fix_branch.outputs.fix_branch }}" \
             --base "${{ github.ref_name }}" \
-            --merge-mode squash \
+            --merge-mode "${{ steps.decide_merge_mode.outputs.merge_mode }}" \
             --json-output .ai/auto-fix-pr.json
-      - if: always() && steps.prepare_fix_branch.outputs.changed == 'true'
+      - name: Create degraded PR metadata when no branch was pushed
+        if: always() && steps.prepare_fix_branch.outputs.changed != 'true'
+        shell: bash
+        run: |
+          cat > .ai/auto-fix-pr.json <<'JSON'
+          {
+            "ok": true,
+            "pr_created": false,
+            "pr_number": null,
+            "pr_url": "",
+            "compare_url": "",
+            "merge_requested": false,
+            "merge_status": "not_requested"
+          }
+          JSON
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: review-auto-fix-pr
           path: .ai/auto-fix-pr.json
+          if-no-files-found: warn
+
+  publish-review-issue:
+    needs:
+      - prepare-diff
+      - prepare-mcp-context
+      - review-code
+      - review-security
+      - review-docs-runtime
+      - review-coordinator
+      - validate-auto-fix
+      - auto-fix
+    if: always() && needs.prepare-diff.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai pyyaml uv
+      - uses: actions/download-artifact@v4
+        with:
+          path: .ai-artifacts
+      - name: Arrange review artifacts
+        shell: bash
+        run: |
+          mkdir -p .ai
+          cp .ai-artifacts/review-payload/review-payload.json .ai/review-payload.json
+          cp .ai-artifacts/review-context/review-context.json .ai/review-context.json
+          [ -f .ai-artifacts/review-code/review-code.json ] && cp .ai-artifacts/review-code/review-code.json .ai/review-code.json || true
+          [ -f .ai-artifacts/review-security/review-security.json ] && cp .ai-artifacts/review-security/review-security.json .ai/review-security.json || true
+          [ -f .ai-artifacts/review-docs-runtime/review-docs-runtime.json ] && cp .ai-artifacts/review-docs-runtime/review-docs-runtime.json .ai/review-docs-runtime.json || true
+          [ -f .ai-artifacts/review-final-report/final-review.md ] && cp .ai-artifacts/review-final-report/final-review.md .ai/final-review.md || true
+          [ -f .ai-artifacts/review-auto-fix/auto-fix.json ] && cp .ai-artifacts/review-auto-fix/auto-fix.json .ai/auto-fix.json || true
+          [ -f .ai-artifacts/review-auto-fix-validation/auto-fix-validation.json ] && cp .ai-artifacts/review-auto-fix-validation/auto-fix-validation.json .ai/auto-fix-validation.json || true
+          [ -f .ai-artifacts/review-auto-fix-pr/auto-fix-pr.json ] && cp .ai-artifacts/review-auto-fix-pr/auto-fix-pr.json .ai/auto-fix-pr.json || true
+      - name: Build review audit artifact
+        run: >
+          python -m tools.ai_review.build_audit_artifact review
+          --payload .ai/review-payload.json
+          --context .ai/review-context.json
+          --review .ai/review-code.json
+          --review .ai/review-security.json
+          --review .ai/review-docs-runtime.json
+          --report .ai/final-review.md
+          --fix .ai/auto-fix.json
+          --validation .ai/auto-fix-validation.json
+          --pr .ai/auto-fix-pr.json
+          --output .ai/review-audit.json
+      - name: Publish review issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python -m tools.ai_review.publish_review_issue
+          --report-file .ai/final-review.md
+          --review-status "${{ needs.review-coordinator.result }}"
+          --auto-fix-status "${{ needs.auto-fix.result }}"
+          --audit-file .ai/review-audit.json
+      - if: always() && vars.AI_REVIEW_AUDIT_ARTIFACT != 'false' && vars.AI_REVIEW_AUDIT_ARTIFACT != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-audit
+          path: |
+            .ai/review-audit.json
+            .ai/review-context.json
           if-no-files-found: warn

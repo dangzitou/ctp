@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 from .common import REPO_ROOT, ensure_parent, main_cli_error, read_json, write_json, write_summary
 from .llm import model_for, request_text
+from .policy import assess_paths
 from .prompts import FIXER_SYSTEM, build_fix_prompt
 from .review_data import should_auto_fix
 
@@ -37,7 +37,7 @@ def _extract_json_blob(text: str) -> dict:
                 return payload
         except json.JSONDecodeError:
             continue
-    raise RuntimeError("自动修复模型没有返回合法 JSON。")
+    raise RuntimeError("Auto-fix model did not return valid JSON.")
 
 
 def _normalize_changes(changes: list[dict], allowed_paths: set[str]) -> list[dict]:
@@ -46,62 +46,58 @@ def _normalize_changes(changes: list[dict], allowed_paths: set[str]) -> list[dic
     for item in changes:
         path = str(item.get("path", "")).strip().replace("\\", "/")
         content = item.get("content")
-        if not path or path in seen:
+        if not path or path in seen or path not in allowed_paths:
             continue
-        if path not in allowed_paths:
-            continue
-        if not should_auto_fix(path):
-            continue
-        if not isinstance(content, str):
+        if not should_auto_fix(path) or not isinstance(content, str):
             continue
         seen.add(path)
         normalized.append({"path": path, "content": content})
     return normalized
 
 
-def _looks_placeholder_summary(summary: str) -> bool:
-    normalized = (summary or "").strip().lower()
-    if not normalized:
-        return True
-    return normalized in {"一句中文总结", "自动修复已执行。", "auto fix applied"}
+def _base_result() -> dict:
+    return {
+        "ok": True,
+        "changed": False,
+        "summary": "",
+        "root_cause_guess": "",
+        "evidence_sources": [],
+        "changes": [],
+        "changed_files": [],
+        "risk_level": "",
+        "auto_fix_allowed": False,
+        "auto_merge_allowed": False,
+        "blocked_reason": "",
+        "reason": "",
+        "blocked_auto_fix_paths": [],
+        "blocked_auto_merge_paths": [],
+        "path_policies": [],
+        "gates": [],
+    }
 
 
-def _heuristic_secret_fix(file_snapshots: list[dict], report_text: str) -> tuple[str, list[dict]]:
-    markers = ["硬编码", "api 密钥", "api key", "hardcoded", "secret", "token", "password"]
-    if not any(marker.lower() in report_text.lower() for marker in markers):
-        return "", []
-
-    assignment_pattern = re.compile(
-        r'^(?P<indent>\s*)(?P<name>[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD))\s*=\s*[\'"](?P<value>[^\'"]+)[\'"]\s*$',
-        re.MULTILINE,
-    )
-    import_os_pattern = re.compile(r"^\s*import os\s*$", re.MULTILINE)
-
-    changes = []
-    for item in file_snapshots:
-        original = item["content"]
-        matches = list(assignment_pattern.finditer(original))
-        if not matches:
-            continue
-
-        def replace_secret(match: re.Match[str]) -> str:
-            name = match.group("name")
-            indent = match.group("indent")
-            return f'{indent}{name} = os.environ.get("{name}", "")'
-
-        updated = assignment_pattern.sub(replace_secret, original)
-        if not import_os_pattern.search(updated):
-            updated = "import os\n\n" + updated
-        if updated != original:
-            changes.append({"path": item["path"], "content": updated})
-
-    if not changes:
-        return "", []
-    return "已通过兜底规则将硬编码敏感信息改为环境变量读取。", changes
-
-
-def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_output: str | None) -> int:
+def _load_payload(input_path: str, context_path: str | None = None) -> dict:
     payload = read_json(input_path)
+    if context_path and Path(context_path).exists():
+        payload["mcp_context"] = read_json(context_path)
+    return payload
+
+
+def _write_result(metadata_output: str, summary_output: str | None, result: dict) -> None:
+    ensure_parent(metadata_output)
+    write_json(metadata_output, result)
+    if summary_output:
+        ensure_parent(summary_output)
+        body = result["summary"] + (
+            "\n\n修改文件:\n" + "\n".join(f"- {item['path']}" for item in result.get("changes", []))
+            if result.get("changes")
+            else "\n\n未生成文件修改。"
+        )
+        Path(summary_output).write_text(body.rstrip() + "\n", encoding="utf-8")
+
+
+def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_output: str | None, context_path: str | None = None) -> int:
+    payload = _load_payload(input_path, context_path)
     report_text = Path(report_path).read_text(encoding="utf-8")
 
     no_issue_markers = [
@@ -109,21 +105,16 @@ def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_o
         "没有检测到可审查的有效变更",
     ]
     if any(marker in report_text for marker in no_issue_markers):
-        result = {
-            "ok": True,
-            "changed": False,
-            "summary": "审查结果未发现需要自动修复的明确问题。",
-            "changes": [],
-        }
-        ensure_parent(metadata_output)
-        write_json(metadata_output, result)
-        if summary_output:
-            ensure_parent(summary_output)
-            Path(summary_output).write_text(result["summary"] + "\n", encoding="utf-8")
+        result = _base_result()
+        result["summary"] = "审查结果未发现需要自动修复的明确问题。"
+        result["reason"] = result["summary"]
+        result["blocked_reason"] = result["summary"]
+        _write_result(metadata_output, summary_output, result)
         write_summary("## AI 自动修复\n\n未检测到需要自动修复的明确问题。")
         return 0
 
     file_snapshots = []
+    all_paths = []
     allowed_paths = set()
     for path in payload.get("included_files", []):
         normalized = str(path).replace("\\", "/")
@@ -132,66 +123,70 @@ def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_o
             continue
         content = full_path.read_text(encoding="utf-8", errors="replace")
         file_snapshots.append({"path": normalized, "content": content})
-        if not should_auto_fix(normalized):
-            continue
-        allowed_paths.add(normalized)
+        all_paths.append(normalized)
+        if should_auto_fix(normalized):
+            allowed_paths.add(normalized)
 
+    assessment = assess_paths(all_paths)
     if not file_snapshots:
-        result = {
-            "ok": False,
-            "changed": False,
-            "summary": "自动修复未执行：没有找到可安全修改的文件快照。",
-            "changes": [],
-        }
-        ensure_parent(metadata_output)
-        write_json(metadata_output, result)
-        if summary_output:
-            ensure_parent(summary_output)
-            Path(summary_output).write_text(result["summary"] + "\n", encoding="utf-8")
+        result = _base_result()
+        result["ok"] = False
+        result["summary"] = "自动修复未执行：没有找到可安全修改的文件快照。"
+        result["reason"] = result["summary"]
+        result["blocked_reason"] = result["summary"]
+        result["risk_level"] = assessment["risk_level"]
+        result["auto_fix_allowed"] = assessment["auto_fix_allowed"]
+        result["auto_merge_allowed"] = assessment["auto_merge_allowed"]
+        result["blocked_auto_fix_paths"] = assessment["blocked_auto_fix_paths"]
+        result["blocked_auto_merge_paths"] = assessment["blocked_auto_merge_paths"]
+        result["path_policies"] = assessment["paths"]
+        _write_result(metadata_output, summary_output, result)
         write_summary(f"## AI 自动修复\n\n{result['summary']}")
         return 1
 
     model = model_for("AI_REVIEW_MODEL", DEFAULT_MODEL)
     raw = request_text(FIXER_SYSTEM, build_fix_prompt(payload, report_text, file_snapshots), model, temperature=0.1)
     parsed = _extract_json_blob(raw)
-    summary = str(parsed.get("summary") or "").strip()
     changes = _normalize_changes(parsed.get("changes") or [], allowed_paths)
-
-    if not changes:
-        fallback_summary, fallback_changes = _heuristic_secret_fix(file_snapshots, report_text)
-        if fallback_changes:
-            changes = fallback_changes
-            if _looks_placeholder_summary(summary):
-                summary = fallback_summary
+    changed_paths = [item["path"] for item in changes]
+    change_assessment = assess_paths(changed_paths)
 
     for item in changes:
         target = REPO_ROOT / item["path"]
         target.write_text(item["content"], encoding="utf-8")
 
-    if _looks_placeholder_summary(summary):
-        summary = "自动修复已执行。"
+    result = _base_result()
+    result.update(
+        {
+            "changed": bool(changes),
+            "summary": str(parsed.get("summary") or "").strip() or ("自动修复已执行。" if changes else "自动修复未生成可落地的修改。"),
+            "root_cause_guess": str(parsed.get("root_cause_guess") or "").strip(),
+            "evidence_sources": [str(item) for item in parsed.get("evidence_sources", []) if str(item).strip()],
+            "changes": changes,
+            "changed_files": changed_paths,
+            "risk_level": change_assessment["risk_level"],
+            "auto_fix_allowed": change_assessment["auto_fix_allowed"],
+            "auto_merge_allowed": change_assessment["auto_merge_allowed"],
+            "blocked_auto_fix_paths": change_assessment["blocked_auto_fix_paths"],
+            "blocked_auto_merge_paths": change_assessment["blocked_auto_merge_paths"],
+            "path_policies": change_assessment["paths"],
+        }
+    )
+    if not changes:
+        result["reason"] = "Model did not produce policy-compliant changes."
+        result["blocked_reason"] = result["reason"]
+    elif change_assessment["blocked_auto_merge_paths"]:
+        result["reason"] = "Changed files include paths outside low-risk auto-merge policy."
+        result["blocked_reason"] = result["reason"]
+    else:
+        result["reason"] = "Auto-fix generated policy-compliant changes."
 
-    result = {
-        "ok": True,
-        "changed": bool(changes),
-        "summary": summary,
-        "changes": changes,
-    }
-    ensure_parent(metadata_output)
-    write_json(metadata_output, result)
-    if summary_output:
-        ensure_parent(summary_output)
-        body = summary + (
-            "\n\n修改文件：\n" + "\n".join(f"- {item['path']}" for item in changes)
-            if changes
-            else "\n\n未生成文件修改。"
-        )
-        Path(summary_output).write_text(body.rstrip() + "\n", encoding="utf-8")
+    _write_result(metadata_output, summary_output, result)
     write_summary(
         "## AI 自动修复\n\n"
-        + summary
+        + result["summary"]
         + (
-            "\n\n修改文件：\n" + "\n".join(f"- `{item['path']}`" for item in changes)
+            "\n\n修改文件:\n" + "\n".join(f"- `{item['path']}`" for item in changes)
             if changes
             else "\n\n未生成文件修改。"
         )
@@ -199,17 +194,36 @@ def apply_fix(input_path: str, report_path: str, metadata_output: str, summary_o
     return 0
 
 
+def materialize_fix(metadata_path: str) -> int:
+    payload = read_json(metadata_path)
+    for item in payload.get("changes", []):
+        path = str(item.get("path", "")).replace("\\", "/").strip()
+        content = item.get("content")
+        if not path or not isinstance(content, str):
+            continue
+        target = REPO_ROOT / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["apply"])
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--report", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("cmd", choices=["apply", "materialize"])
+    parser.add_argument("--input")
+    parser.add_argument("--report")
+    parser.add_argument("--output")
     parser.add_argument("--summary-output")
+    parser.add_argument("--context")
     args = parser.parse_args()
 
     if args.cmd == "apply":
-        raise SystemExit(apply_fix(args.input, args.report, args.output, args.summary_output))
+        if not args.input or not args.report or not args.output:
+            raise RuntimeError("`apply` requires --input, --report, and --output.")
+        raise SystemExit(apply_fix(args.input, args.report, args.output, args.summary_output, args.context))
+    if not args.input:
+        raise RuntimeError("`materialize` requires --input.")
+    raise SystemExit(materialize_fix(args.input))
 
 
 if __name__ == "__main__":
