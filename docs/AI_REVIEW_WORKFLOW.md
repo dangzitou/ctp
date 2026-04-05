@@ -123,6 +123,7 @@ The scheduled audit reads a curated repository snapshot focused on:
 - Scheduled audit keeps a single reusable issue instead of opening duplicates.
 - Auto-fix only attempts bounded changes in already-reviewed text files and submits them through a PR instead of pushing directly to the target branch.
 - When PR creation succeeds, the workflow tries to squash-merge the auto-fix PR immediately; if GitHub blocks immediate merge, it falls back to enabling auto-merge.
+- Pushes produced by the auto-fix merge commit are ignored by the review workflow to avoid self-trigger loops.
 - If auto-fix can push a branch but cannot open a PR, configure `AI_REVIEW_GH_TOKEN` or `AI_AUTOFIX_GITHUB_TOKEN`, or enable the repository setting that allows GitHub Actions to create pull requests.
 - A token that returns `403 Resource not accessible by personal access token` is missing `Pull requests: Read and write`.
 - If SMTP settings are missing, the review email job is skipped or fails clearly based on the configured recipient and SMTP secrets.

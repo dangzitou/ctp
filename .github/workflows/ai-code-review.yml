@@ -30,7 +30,12 @@ concurrency:
 
 jobs:
   prepare-diff:
-    if: github.actor != 'github-actions[bot]'
+    if: >
+      github.actor != 'github-actions[bot]' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -60,7 +65,12 @@ jobs:
 
   review-code:
     needs: prepare-diff
-    if: github.actor != 'github-actions[bot]'
+    if: >
+      github.actor != 'github-actions[bot]' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -89,7 +99,12 @@ jobs:
 
   review-security:
     needs: prepare-diff
-    if: github.actor != 'github-actions[bot]'
+    if: >
+      github.actor != 'github-actions[bot]' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -118,7 +133,12 @@ jobs:
 
   review-docs-runtime:
     needs: prepare-diff
-    if: github.actor != 'github-actions[bot]'
+    if: >
+      github.actor != 'github-actions[bot]' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -151,7 +171,13 @@ jobs:
       - review-code
       - review-security
       - review-docs-runtime
-    if: always() && github.actor != 'github-actions[bot]'
+    if: >
+      always() &&
+      github.actor != 'github-actions[bot]' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -198,7 +224,14 @@ jobs:
       - prepare-diff
       - review-coordinator
       - auto-fix
-    if: always() && github.actor != 'github-actions[bot]' && vars.AI_REVIEW_MAIL_TO != ''
+    if: >
+      always() &&
+      github.actor != 'github-actions[bot]' &&
+      vars.AI_REVIEW_MAIL_TO != '' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -260,7 +293,13 @@ jobs:
     needs:
       - prepare-diff
       - review-coordinator
-    if: needs.review-coordinator.result == 'success' && github.actor != 'github-actions[bot]'
+    if: >
+      needs.review-coordinator.result == 'success' &&
+      github.actor != 'github-actions[bot]' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        !startsWith(github.event.head_commit.message, 'chore(ai): 自动修复审查发现的问题')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
