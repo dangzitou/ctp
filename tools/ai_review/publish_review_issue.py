@@ -10,10 +10,7 @@ import re
 from pathlib import Path
 
 from .common import main_cli_error, render_timestamp_lines
-from .github_api import ensure_label, upsert_review_issue
-
-
-REVIEW_ISSUE_TITLE = "AI Code Review Inbox"
+from .github_api import close_legacy_ai_issues, ensure_label, upsert_center_issue_section
 SECTION_PATTERN = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
@@ -133,9 +130,11 @@ def main() -> None:
     )
 
     ensure_label("ai-review", "1d76db", "Automated AI push review result")
+    ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
     ensure_label("automation", "5319e7", "Automation-generated issue or pull request")
     ensure_label("triage", "d4c5f9", "Needs triage")
-    upsert_review_issue(REVIEW_ISSUE_TITLE, body, ["ai-review", "automation", "triage"])
+    upsert_center_issue_section("review", body, ["ai-review", "ai-audit", "automation", "triage"])
+    close_legacy_ai_issues()
 
 
 if __name__ == "__main__":

@@ -10,9 +10,15 @@ from .common import write_summary
 
 
 COMMENT_MARKER = "<!-- ai-commit-review -->"
-ISSUE_MARKER = "<!-- ai-repo-audit -->"
+CENTER_ISSUE_MARKER = "<!-- ai-review-center -->"
+REVIEW_SECTION_START = "<!-- ai-review-section:start -->"
+REVIEW_SECTION_END = "<!-- ai-review-section:end -->"
+AUDIT_SECTION_START = "<!-- ai-audit-section:start -->"
+AUDIT_SECTION_END = "<!-- ai-audit-section:end -->"
 REVIEW_ISSUE_MARKER = "<!-- ai-review-inbox -->"
+ISSUE_MARKER = "<!-- ai-repo-audit -->"
 FIX_PR_MARKER = "<!-- ai-auto-fix-pr -->"
+CENTER_ISSUE_TITLE = "AI Review Center"
 
 
 class GitHubApiError(RuntimeError):
@@ -42,7 +48,7 @@ def _http_error_details(exc: urllib.error.HTTPError) -> GitHubApiError:
     elif body:
         parts.append(f"Response: {body}")
     if accepted:
-        parts.append(f"Required permissions: `\`{accepted}\`\`.")
+        parts.append(f"Required permissions: `\\{accepted}\\`.")
     if exc.code == 403 and api_message == "Resource not accessible by personal access token":
         parts.append(
             "The current token cannot create pull requests. "
@@ -144,7 +150,6 @@ def ensure_label(name: str, color: str, description: str) -> None:
 
 
 def _fetch_all_open_issues(url_template: str, per_page: int = 100) -> list:
-    """Fetch all open issues with pagination support."""
     all_issues = []
     page = 1
     while True:
@@ -175,32 +180,84 @@ def _fetch_paginated(url_template: str, per_page: int = 100, page_limit: int = 5
     return items
 
 
-def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None:
-    body = f"{ISSUE_MARKER}\n# {title}\n\n{body_content}"
+def _issue_matches_center(issue: dict) -> bool:
+    current = issue.get("body", "")
+    return CENTER_ISSUE_MARKER in current or issue.get("title") == CENTER_ISSUE_TITLE
+
+
+def _render_center_issue(review_section: str = "", audit_section: str = "") -> str:
+    review_body = review_section.strip() or "等待下一次 push 审查结果。"
+    audit_body = audit_section.strip() or "等待下一次定时巡查结果。"
+    return (
+        f"{CENTER_ISSUE_MARKER}\n"
+        f"# {CENTER_ISSUE_TITLE}\n\n"
+        "这个 issue 统一汇总 push 审查和定时巡查结果。\n\n"
+        f"{REVIEW_SECTION_START}\n"
+        "## Push 审查\n"
+        f"{review_body}\n"
+        f"{REVIEW_SECTION_END}\n\n"
+        f"{AUDIT_SECTION_START}\n"
+        "## 定时巡查\n"
+        f"{audit_body}\n"
+        f"{AUDIT_SECTION_END}\n"
+    )
+
+
+def _extract_section(body: str, start_marker: str, end_marker: str) -> str:
+    start = body.find(start_marker)
+    end = body.find(end_marker)
+    if start == -1 or end == -1 or end <= start:
+        return ""
+    content = body[start + len(start_marker):end].strip()
+    lines = content.splitlines()
+    if lines and lines[0].startswith("## "):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _find_or_create_center_issue(labels: list[str]) -> dict:
     issues_url = repo_api_url("/issues?state=open")
     issues = _fetch_all_open_issues(issues_url)
     if isinstance(issues, list):
         for issue in issues:
-            current = issue.get("body", "")
-            issue_labels = [label.get("name") for label in issue.get("labels", [])]
-            if ISSUE_MARKER in current or (issue.get("title") == title and all(label in issue_labels for label in labels)):
-                github_request("PATCH", issue["url"], {"title": title, "body": body, "labels": labels})
-                return
-    github_request("POST", repo_api_url("/issues"), {"title": title, "body": body, "labels": labels})
+            if _issue_matches_center(issue):
+                return issue
+    created = github_request(
+        "POST",
+        repo_api_url("/issues"),
+        {"title": CENTER_ISSUE_TITLE, "body": _render_center_issue(), "labels": labels},
+    )
+    if not isinstance(created, dict):
+        raise RuntimeError("Unexpected GitHub issue create response.")
+    return created
 
 
-def upsert_review_issue(title: str, body_content: str, labels: list[str]) -> None:
-    body = f"{REVIEW_ISSUE_MARKER}\n# {title}\n\n{body_content}"
-    issues_url = repo_api_url("/issues?state=open")
-    issues = _fetch_all_open_issues(issues_url)
-    if isinstance(issues, list):
-        for issue in issues:
-            current = issue.get("body", "")
-            issue_labels = [label.get("name") for label in issue.get("labels", [])]
-            if REVIEW_ISSUE_MARKER in current or (issue.get("title") == title and all(label in issue_labels for label in labels)):
-                github_request("PATCH", issue["url"], {"title": title, "body": body, "labels": labels})
-                return
-    github_request("POST", repo_api_url("/issues"), {"title": title, "body": body, "labels": labels})
+def upsert_center_issue_section(section: str, body_content: str, labels: list[str]) -> None:
+    issue = _find_or_create_center_issue(labels)
+    current_body = str(issue.get("body", ""))
+    review_section = _extract_section(current_body, REVIEW_SECTION_START, REVIEW_SECTION_END)
+    audit_section = _extract_section(current_body, AUDIT_SECTION_START, AUDIT_SECTION_END)
+    if section == "review":
+        review_section = body_content.strip()
+    elif section == "audit":
+        audit_section = body_content.strip()
+    else:
+        raise ValueError(f"Unknown center issue section: {section}")
+    body = _render_center_issue(review_section, audit_section)
+    github_request("PATCH", issue["url"], {"title": CENTER_ISSUE_TITLE, "body": body, "labels": labels})
+
+
+def close_legacy_ai_issues() -> None:
+    issues = _fetch_all_open_issues(repo_api_url("/issues?state=open"))
+    if not isinstance(issues, list):
+        return
+    for issue in issues:
+        if _issue_matches_center(issue):
+            continue
+        body = str(issue.get("body", ""))
+        title = str(issue.get("title", ""))
+        if REVIEW_ISSUE_MARKER in body or ISSUE_MARKER in body or title in {"AI Code Review Inbox", "AI Repo Audit"}:
+            github_request("PATCH", issue["url"], {"state": "closed"})
 
 
 def upsert_pull_request(title: str, body_content: str, head: str, base: str, labels: list[str] | None = None) -> dict:

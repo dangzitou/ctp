@@ -9,14 +9,13 @@ import re
 from datetime import datetime, timezone
 
 from .common import ensure_parent, main_cli_error, read_json, render_timestamp_lines, short_exc, write_json, write_summary
-from .github_api import ensure_label, upsert_audit_issue
+from .github_api import close_legacy_ai_issues, ensure_label, upsert_center_issue_section
 from .llm import model_for, request_markdown
 from .prompts import REVIEWER_SYSTEM, build_coordinate_prompt, build_reviewer_prompt
 from .review_data import collect_repo_snapshot
 
 
 DEFAULT_MODEL = "MiniMax-M2.5"
-AUDIT_TITLE = "AI Repo Audit"
 SECTION_PATTERN = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
@@ -177,11 +176,13 @@ def coordinate(input_path: str, outputs: list[str], strict: bool, report_output:
             handle.write(final_report.rstrip() + "\n")
 
     if os.getenv("GITHUB_REPOSITORY") and os.getenv("GITHUB_TOKEN"):
+        ensure_label("ai-review", "1d76db", "Automated AI push review result")
         ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
         ensure_label("automation", "5319e7", "Automation-generated issue")
         ensure_label("triage", "d4c5f9", "Needs triage")
         context = payload.get("mcp_context", {}) if isinstance(payload.get("mcp_context"), dict) else {}
-        upsert_audit_issue(AUDIT_TITLE, _format_issue_body(final_report, context), ["ai-audit", "automation", "triage"])
+        upsert_center_issue_section("audit", _format_issue_body(final_report, context), ["ai-review", "ai-audit", "automation", "triage"])
+        close_legacy_ai_issues()
 
     write_summary(f"## AI 仓库巡查\n\n巡查模型: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
     print(final_report)
