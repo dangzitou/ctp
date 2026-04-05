@@ -52,19 +52,21 @@ def _section_value(sections: dict[str, str], *names: str) -> str:
 
 def _report_digest(report: str) -> dict:
     sections = _extract_sections(report)
-    summary = _section_value(sections, "总结", "summary")
-    findings = _extract_bullets(_section_value(sections, "发现", "findings"))
-    test_gaps = _extract_bullets(_section_value(sections, "测试缺口", "test gaps"))
+    purpose = _section_value(sections, "这个仓库是在干什么", "purpose", "summary", "总结")
+    findings = _extract_bullets(_section_value(sections, "最值得注意的 1-3 个问题", "findings", "发现"))
+    suggestions = _extract_bullets(_section_value(sections, "大白话建议", "suggestions"))
+    test_gaps = _extract_bullets(_section_value(sections, "测试/验证缺口", "test gaps", "测试缺口"))
     agents = _extract_bullets(_section_value(sections, "Agent 明细", "agent breakdown"))
     verdict = "attention"
-    if not findings or findings == ["未发现需要优先处理的重大问题。"]:
+    if not findings or findings == ["这轮没看到需要立刻处理的大问题。"]:
         verdict = "pass"
     if any("failed" in item.lower() for item in agents):
         verdict = "degraded"
     return {
         "verdict": verdict,
-        "summary": summary,
+        "summary": purpose,
         "findings": findings,
+        "suggestions": suggestions,
         "test_gaps": test_gaps,
         "agent_breakdown": agents,
         "report_excerpt": "\n".join(report.splitlines()[:30]),
@@ -98,7 +100,7 @@ def build_review_audit(
     context_path: str | None = None,
 ) -> None:
     payload = read_json(payload_path)
-    report = _read_text_if_exists(report_path, "## 总结\nreview-coordinator 未产出报告。\n")
+    report = _read_text_if_exists(report_path, "## 这个仓库是在干什么\nreview-coordinator 没有产出报告。\n")
     reviewer_results = [read_json(path) for path in reviews if os.path.exists(path)]
     fix = _read_json_if_exists(fix_path)
     validation = _read_json_if_exists(validation_path)
@@ -145,7 +147,7 @@ def build_review_audit(
 
 def build_repo_audit(payload_path: str, reviews: list[str], report_path: str, output_path: str, context_path: str | None = None) -> None:
     payload = read_json(payload_path)
-    report = _read_text_if_exists(report_path, "## 总结\naudit-coordinator 未产出报告。\n")
+    report = _read_text_if_exists(report_path, "## 这个仓库是在干什么\naudit-coordinator 没有产出报告。\n")
     reviewer_results = [read_json(path) for path in reviews if os.path.exists(path)]
     context = _read_json_if_exists(context_path)
     digest = _report_digest(report)

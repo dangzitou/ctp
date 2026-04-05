@@ -21,13 +21,13 @@ def _compact_comment(report: str) -> str:
     bullet_count = 0
     for line in report.splitlines():
         stripped = line.rstrip()
-        if stripped.startswith("## ") and kept and ("测试缺口" in stripped or "娴嬭瘯缂哄彛" in stripped):
+        if stripped.startswith("## ") and kept and stripped in {"## 测试/验证缺口", "## Agent 明细"}:
             break
         if stripped:
             kept.append(stripped)
         if stripped.startswith("- "):
             bullet_count += 1
-            if bullet_count >= 6:
+            if bullet_count >= 5:
                 break
     return "\n".join(kept).strip() or report.strip()
 
@@ -70,9 +70,14 @@ def reviewer(role: str, input_path: str, output_path: str, strict: bool, context
                 "role": role,
                 "ok": True,
                 "content": (
-                    "## 总结\n本次提交没有检测到可审查的有效变更。\n\n"
-                    "## 发现\n- 未发现需要优先处理的重大问题。\n\n"
-                    "## 测试缺口\n- 本轮审查未识别出关键的额外测试缺口。\n"
+                    "## 这个仓库是在干什么\n"
+                    "这是一个围绕 CTP 行情采集、数据分发和运行维护的仓库，但这次提交没有带来可审查的有效代码改动。\n\n"
+                    "## 最值得注意的 1-3 个问题\n"
+                    "- 这轮没看到需要立刻处理的大问题。\n\n"
+                    "## 大白话建议\n"
+                    "- 继续关注真实数据流和运行状态，不要只看流程是否执行成功。\n\n"
+                    "## 测试/验证缺口\n"
+                    "- 这轮没有额外必须补的验证动作。\n"
                 ),
             }
         else:
@@ -86,6 +91,30 @@ def reviewer(role: str, input_path: str, output_path: str, strict: bool, context
     return 1 if strict and not result.get("ok") else 0
 
 
+def _degraded_report(reviewer_results: list[dict], error: str | None = None) -> str:
+    findings = (
+        f"- [高] 审查流程自己没跑通\n影响: 这次结论不完整，不能把“没报错”当成真的没问题。\n判断依据: 直接证据，coordinator 失败，错误是 `{error}`。\n建议: 先修审查流程，再重新跑一遍。"
+        if error
+        else "- [高] 审查流程自己没跑通\n影响: 这次没有拿到可靠的审查结论。\n判断依据: 直接证据，所有 reviewer agent 都失败了。\n建议: 先检查模型密钥、MCP 和 GitHub 权限。"
+    )
+    agents = [
+        f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
+        for item in reviewer_results
+    ]
+    return (
+        "## 这个仓库是在干什么\n"
+        "这是一个围绕 CTP 行情采集、数据分发和运维链路的仓库，但这次审查流程没有完整跑通，所以当前结论可信度有限。\n\n"
+        "## 最值得注意的 1-3 个问题\n"
+        f"{findings}\n\n"
+        "## 大白话建议\n"
+        "- 先把审查流程跑通，再谈仓库是否真的安全。\n\n"
+        "## 测试/验证缺口\n"
+        "- 先修复审查流程本身，再重新跑一次完整审查。\n\n"
+        "## Agent 明细\n"
+        + "\n".join(agents)
+    )
+
+
 def coordinate(input_path: str, outputs: list[str], strict: bool, report_output: str | None = None, context_path: str | None = None) -> int:
     payload = _load_payload(input_path, context_path)
     reviewer_results = [read_json(path) for path in outputs if os.path.exists(path)]
@@ -96,29 +125,10 @@ def coordinate(input_path: str, outputs: list[str], strict: bool, report_output:
         try:
             final_report = request_markdown(REVIEWER_SYSTEM, build_coordinate_prompt("review", payload, reviewer_results), model)
         except Exception as exc:
-            final_report = (
-                "## 总结\ncoordinator 执行失败，当前仅提供降级结果。\n"
-                "## 发现\n"
-                f"- [高] workflow - coordinator 执行失败，错误为 `{short_exc(exc)}`；当前审查结论可能不完整。\n"
-                "## 测试缺口\n- 修复 coordinator 后重新运行代码审查 workflow。\n"
-                "## Agent 明细\n"
-                + "\n".join(
-                    f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
-                    for item in reviewer_results
-                )
-            )
+            final_report = _degraded_report(reviewer_results, short_exc(exc))
             failed.append({"role": "coordinator", "ok": False, "error": short_exc(exc)})
     else:
-        final_report = (
-            "## 总结\n多 agent 代码审查未能成功完成。\n"
-            "## 发现\n- [高] workflow - 所有 reviewer agent 都失败了，本次没有产出可依赖的审查结论。\n"
-            "## 测试缺口\n- 请检查 API 密钥、MCP 上下文采集与 reviewer 失败原因后重新运行 workflow。\n"
-            "## Agent 明细\n"
-            + "\n".join(
-                f"- {item.get('role', 'unknown')}: failed: {item.get('error', 'unknown error')}"
-                for item in reviewer_results
-            )
-        )
+        final_report = _degraded_report(reviewer_results)
 
     if report_output:
         ensure_parent(report_output)

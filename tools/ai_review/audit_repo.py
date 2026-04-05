@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from datetime import datetime, timezone
 
 from .common import ensure_parent, main_cli_error, read_json, render_timestamp_lines, short_exc, write_json, write_summary
@@ -16,66 +17,72 @@ from .review_data import collect_repo_snapshot
 
 DEFAULT_MODEL = "MiniMax-M2.5"
 AUDIT_TITLE = "AI Repo Audit"
+SECTION_PATTERN = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
-def _format_lines(items: list[str], default: str, limit: int = 12) -> str:
-    lines = [f"- {item}" for item in items[:limit] if str(item).strip()]
-    return "\n".join(lines) or default
+def _extract_sections(markdown: str) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    matches = list(SECTION_PATTERN.finditer(markdown))
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        sections[match.group("title").strip()] = markdown[start:end].strip()
+    return sections
 
 
-def _format_issue_refs(items: list[dict], default: str, limit: int = 8) -> str:
-    lines = []
-    for item in items[:limit]:
-        number = item.get("number", "?")
-        title = str(item.get("title", "")).strip() or "untitled"
-        state = str(item.get("state", "unknown")).strip()
-        updated_at = str(item.get("updated_at", "")).strip()
-        lines.append(f"- `#{number}` {title} (`{state}`{f', {updated_at}' if updated_at else ''})")
-    return "\n".join(lines) or default
+def _extract_bullets(text: str) -> list[str]:
+    return [line.strip()[2:].strip() for line in text.splitlines() if line.strip().startswith("- ")]
 
 
-def _format_run_refs(items: list[dict], default: str, limit: int = 6) -> str:
-    lines = []
-    for item in items[:limit]:
-        name = str(item.get("name", "workflow")).strip()
-        conclusion = str(item.get("conclusion", "unknown")).strip()
-        branch = str(item.get("head_branch", "")).strip()
-        created_at = str(item.get("created_at", "")).strip()
-        detail = ", ".join(part for part in [branch, created_at] if part)
-        suffix = f" ({detail})" if detail else ""
-        lines.append(f"- `{name}` -> `{conclusion}`{suffix}")
-    return "\n".join(lines) or default
+def _pick_lines(text: str, limit: int = 2) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[:limit]).strip()
 
 
-def _context_evidence_section(context: dict) -> str:
+def _context_hint(context: dict) -> str:
+    hints: list[str] = []
     related_files = context.get("related_files") or context.get("included_files") or []
-    related_issues = context.get("related_issues") or context.get("recent_issues") or []
-    related_prs = context.get("related_prs") or []
-    recent_failed_runs = context.get("recent_failed_runs") or []
+    recent_issues = context.get("related_issues") or context.get("recent_issues") or []
+    failed_runs = context.get("recent_failed_runs") or []
     degraded_reasons = context.get("degraded_reasons") or []
 
-    related_file_lines = _format_lines([f"`{path}`" for path in related_files], "- None")
-    related_issue_lines = _format_issue_refs(related_issues, "- None")
-    related_pr_lines = _format_issue_refs(related_prs, "- None")
-    failed_run_lines = _format_run_refs(recent_failed_runs, "- None")
-    degraded_lines = _format_lines(degraded_reasons, "- None", limit=10)
+    if related_files:
+        hints.append("看了关键文件：" + "、".join(str(item) for item in related_files[:4]))
+    if recent_issues:
+        hints.append(
+            "参考了历史问题："
+            + "、".join(f"#{item.get('number', '?')} {str(item.get('title', '')).strip()}" for item in recent_issues[:2])
+        )
+    if failed_runs:
+        hints.append(
+            "看了近期失败流水线："
+            + "、".join(str(item.get("name", "workflow")).strip() for item in failed_runs[:2])
+        )
+    if context.get("degraded"):
+        detail = "；".join(str(item) for item in degraded_reasons[:2]) or "部分上下文采集失败"
+        hints.append(f"本次上下文有降级：{detail}")
+    if not hints:
+        return "- 这次主要根据仓库快照和上下文做了巡查。"
+    return "\n".join(f"- {item}" for item in hints[:3])
 
+
+def _format_issue_body(final_report: str, context: dict) -> str:
+    sections = _extract_sections(final_report)
+    purpose = _pick_lines(sections.get("这个仓库是在干什么", ""), limit=3) or "这轮还没提炼出明确的仓库业务画像。"
+    findings = _extract_bullets(sections.get("最值得注意的 1-3 个问题", ""))[:3]
+    suggestions = _extract_bullets(sections.get("大白话建议", ""))[:3]
+    finding_lines = "\n".join(f"- {item}" for item in findings) or "- 这轮没看到需要立刻处理的大问题。"
+    suggestion_lines = "\n".join(f"- {item}" for item in suggestions) or "- 可以继续跑现有方案，但建议结合真实数据流做一次抽查。"
     return (
-        "## 仓库上下文证据\n"
-        f"- MCP 启用: `{context.get('mcp_enabled', False)}`\n"
-        f"- MCP 来源: `{', '.join(context.get('mcp_sources', [])) or 'none'}`\n"
-        f"- 上下文包大小: `{context.get('context_bundle_size', 0)}`\n"
-        f"- 上下文降级: `{context.get('degraded', False)}`\n\n"
-        "### Related Files\n"
-        f"{related_file_lines}\n\n"
-        "### Related Issues\n"
-        f"{related_issue_lines}\n\n"
-        "### Related PRs\n"
-        f"{related_pr_lines}\n\n"
-        "### Recent Failed Runs\n"
-        f"{failed_run_lines}\n\n"
-        "### Degraded Reasons\n"
-        f"{degraded_lines}\n"
+        f"{render_timestamp_lines('Audit completed')}\n\n"
+        "## 这个仓库是在干什么\n"
+        f"{purpose}\n\n"
+        "## 当前最值得注意的 1-3 个问题\n"
+        f"{finding_lines}\n\n"
+        "## 大白话建议\n"
+        f"{suggestion_lines}\n\n"
+        "## 它这次主要看了什么\n"
+        f"{_context_hint(context)}"
     )
 
 
@@ -123,29 +130,27 @@ def reviewer(role: str, input_path: str, output_path: str, strict: bool, context
 
 
 def _degraded_report(reviewer_results: list[dict], error: str | None = None) -> str:
-    findings = [
-        f"- [high] workflow - 巡查 coordinator 执行失败，错误为 `{error}`。"
+    problem = (
+        f"- [高] 巡查流程自己没跑通\n影响: 这次巡查结论不完整，不能完全相信“没问题”。\n判断依据: 直接证据，coordinator 失败，错误是 `{error}`。\n建议: 先修巡查流程，再重新跑一遍。"
         if error
-        else "- [high] workflow - 所有巡查 agent 都失败了，本次没有产出可靠结论。"
-    ]
-    test_gaps = [
-        "- 修复 coordinator、MCP 上下文或模型调用异常后重新运行仓库巡查 workflow。"
-        if error
-        else "- 检查 MiniMax、MCP 上下文采集和 GitHub 权限后重新运行仓库巡查。"
-    ]
+        else "- [高] 巡查流程自己没跑通\n影响: 这次没有拿到可靠的仓库结论。\n判断依据: 直接证据，所有巡查 reviewer 都失败了。\n建议: 先检查密钥、MCP 和 GitHub 权限。"
+    )
+    test_gap = "- 先修复巡查流程本身，再重新跑一次完整巡查。"
     agents = [
         f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
         for item in reviewer_results
     ] or ["- auditor: failed: no audit outputs found"]
-    summary = "巡查 coordinator 执行失败，当前仅提供降级结果。" if error else "定时巡查未能成功完成。"
+    purpose = "这是一个围绕 CTP 行情采集、数据分发和运维链路的仓库，但本次巡查流程没有完整跑通，所以仓库画像可信度有限。"
     return (
-        "## 总结\n"
-        f"{summary}\n\n"
-        "## 发现\n"
-        + "\n".join(findings)
-        + "\n\n## 测试缺口\n"
-        + "\n".join(test_gaps)
-        + "\n\n## Agent 明细\n"
+        "## 这个仓库是在干什么\n"
+        f"{purpose}\n\n"
+        "## 最值得注意的 1-3 个问题\n"
+        f"{problem}\n\n"
+        "## 大白话建议\n"
+        "- 先把巡查流程跑通，再谈后续风险判断。\n\n"
+        "## 测试/验证缺口\n"
+        f"{test_gap}\n\n"
+        "## Agent 明细\n"
         + "\n".join(agents)
         + "\n"
     )
@@ -176,9 +181,7 @@ def coordinate(input_path: str, outputs: list[str], strict: bool, report_output:
         ensure_label("automation", "5319e7", "Automation-generated issue")
         ensure_label("triage", "d4c5f9", "Needs triage")
         context = payload.get("mcp_context", {}) if isinstance(payload.get("mcp_context"), dict) else {}
-        evidence = _context_evidence_section(context)
-        audit_body = f"{render_timestamp_lines('Audit completed')}\n\n{evidence}\n\n{final_report}"
-        upsert_audit_issue(AUDIT_TITLE, audit_body, ["ai-audit", "automation", "triage"])
+        upsert_audit_issue(AUDIT_TITLE, _format_issue_body(final_report, context), ["ai-audit", "automation", "triage"])
 
     write_summary(f"## AI 仓库巡查\n\n巡查模型: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
     print(final_report)

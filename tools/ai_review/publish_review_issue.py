@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 
 from .common import main_cli_error, render_timestamp_lines
@@ -13,35 +14,68 @@ from .github_api import ensure_label, upsert_review_issue
 
 
 REVIEW_ISSUE_TITLE = "AI Code Review Inbox"
+SECTION_PATTERN = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
-def _format_lines(items: list[str], default: str, limit: int = 12) -> str:
-    lines = [f"- {item}" for item in items[:limit] if str(item).strip()]
-    return "\n".join(lines) or default
+def _extract_sections(markdown: str) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    matches = list(SECTION_PATTERN.finditer(markdown))
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        sections[match.group("title").strip()] = markdown[start:end].strip()
+    return sections
 
 
-def _format_issue_refs(items: list[dict], default: str, limit: int = 8) -> str:
-    lines = []
-    for item in items[:limit]:
-        number = item.get("number", "?")
-        title = str(item.get("title", "")).strip() or "untitled"
-        state = str(item.get("state", "unknown")).strip()
-        updated_at = str(item.get("updated_at", "")).strip()
-        lines.append(f"- `#{number}` {title} (`{state}`{f', {updated_at}' if updated_at else ''})")
-    return "\n".join(lines) or default
+def _extract_bullets(text: str) -> list[str]:
+    return [line.strip()[2:].strip() for line in text.splitlines() if line.strip().startswith("- ")]
 
 
-def _format_run_refs(items: list[dict], default: str, limit: int = 6) -> str:
-    lines = []
-    for item in items[:limit]:
-        name = str(item.get("name", "workflow")).strip()
-        conclusion = str(item.get("conclusion", "unknown")).strip()
-        branch = str(item.get("head_branch", "")).strip()
-        created_at = str(item.get("created_at", "")).strip()
-        detail = ", ".join(part for part in [branch, created_at] if part)
-        suffix = f" ({detail})" if detail else ""
-        lines.append(f"- `{name}` -> `{conclusion}`{suffix}")
-    return "\n".join(lines) or default
+def _pick_lines(text: str, limit: int = 2) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[:limit]).strip()
+
+
+def _format_context_hint(audit: dict) -> str:
+    hints: list[str] = []
+    related_files = audit.get("related_files", [])[:4]
+    related_issues = audit.get("related_issues", [])[:2]
+    failed_runs = audit.get("recent_failed_runs", [])[:2]
+    degraded_reasons = audit.get("degraded_reasons", [])[:2]
+
+    if related_files:
+        hints.append("看了相关文件：" + "、".join(str(item) for item in related_files))
+    if related_issues:
+        hints.append(
+            "参考了历史问题："
+            + "、".join(f"#{item.get('number', '?')} {str(item.get('title', '')).strip()}" for item in related_issues)
+        )
+    if failed_runs:
+        hints.append(
+            "检查了近期失败流水线："
+            + "、".join(str(item.get("name", "workflow")).strip() for item in failed_runs)
+        )
+    if audit.get("degraded"):
+        detail = "；".join(str(item) for item in degraded_reasons) or "部分上下文采集失败"
+        hints.append(f"本次上下文有降级：{detail}")
+    if not hints:
+        return "- 这次主要根据 diff 和仓库上下文做了判断。"
+    return "\n".join(f"- {item}" for item in hints[:3])
+
+
+def _format_auto_fix(audit: dict) -> str:
+    auto_fix = audit.get("auto_fix", {}) if isinstance(audit, dict) else {}
+    reason = str(auto_fix.get("reason", "")).strip()
+    blocked = str(auto_fix.get("blocked_reason", "")).strip()
+    if auto_fix.get("changed"):
+        changed_files = auto_fix.get("changed_files", [])
+        changed_text = "、".join(changed_files[:4]) if changed_files else "有改动"
+        return f"- 已生成自动修复改动：{changed_text}"
+    if blocked:
+        return f"- 这次没有自动修复，原因：{blocked}"
+    if reason:
+        return f"- 这次没有自动修复，原因：{reason}"
+    return "- 这次没有自动修复。"
 
 
 def main() -> None:
@@ -57,40 +91,25 @@ def main() -> None:
     if args.audit_file and Path(args.audit_file).exists():
         audit = json.loads(Path(args.audit_file).read_text(encoding="utf-8"))
 
+    sections = _extract_sections(report)
+    purpose = _pick_lines(sections.get("这个仓库是在干什么", ""), limit=3) or "这轮还没提炼出明确的仓库业务画像。"
+    findings = _extract_bullets(sections.get("最值得注意的 1-3 个问题", ""))[:3]
+    suggestions = _extract_bullets(sections.get("大白话建议", ""))[:3]
+
     repo = os.getenv("GITHUB_REPOSITORY", "unknown")
     ref_name = os.getenv("GITHUB_REF_NAME", "unknown")
     sha = os.getenv("GITHUB_SHA", "unknown")
     run_id = os.getenv("GITHUB_RUN_ID", "unknown")
     server_url = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
 
-    auto_fix = audit.get("auto_fix", {}) if isinstance(audit, dict) else {}
     coordinator = audit.get("coordinator", {}) if isinstance(audit, dict) else {}
-    validation_gates = audit.get("validation_gates", []) if isinstance(audit, dict) else []
-    mcp_tool_calls = audit.get("mcp_tool_calls", []) if isinstance(audit, dict) else []
-    skipped_files = audit.get("skipped_files", []) if isinstance(audit, dict) else []
-    related_files = audit.get("related_files", []) if isinstance(audit, dict) else []
-    related_issues = audit.get("related_issues", []) if isinstance(audit, dict) else []
-    related_prs = audit.get("related_prs", []) if isinstance(audit, dict) else []
-    recent_failed_runs = audit.get("recent_failed_runs", []) if isinstance(audit, dict) else []
-    degraded_reasons = audit.get("degraded_reasons", []) if isinstance(audit, dict) else []
+    risk_level = audit.get("auto_fix", {}).get("risk_level", "unknown") if isinstance(audit, dict) else "unknown"
 
-    gate_lines = "\n".join(
-        f"- `{gate.get('gate_name')}`: `{gate.get('status')}` (required={gate.get('required')})"
-        for gate in validation_gates
-    ) or "- No validation gates executed."
-    mcp_lines = "\n".join(
-        f"- `{item.get('server')}` / `{item.get('tool')}` / ok=`{item.get('ok')}` {item.get('detail', '')}".rstrip()
-        for item in mcp_tool_calls[:20]
-    ) or "- No MCP calls recorded."
-    skipped_lines = "\n".join(f"- `{path}`" for path in skipped_files[:20]) or "- None"
-    related_file_lines = _format_lines([f"`{path}`" for path in related_files], "- None")
-    related_issue_lines = _format_issue_refs(related_issues, "- None")
-    related_pr_lines = _format_issue_refs(related_prs, "- None")
-    failed_run_lines = _format_run_refs(recent_failed_runs, "- None")
-    degraded_lines = _format_lines(degraded_reasons, "- None", limit=10)
+    finding_lines = "\n".join(f"- {item}" for item in findings) or "- 这轮没看到需要立刻处理的大问题。"
+    suggestion_lines = "\n".join(f"- {item}" for item in suggestions) or "- 可以继续按现有方向推进，但建议结合真实数据流再做一次验证。"
 
     body = (
-        "最新一次 push 审查结果如下。\n"
+        "最新一次 push 审查结果如下。\n\n"
         f"{render_timestamp_lines('Review completed')}\n"
         f"- 仓库: `{repo}`\n"
         f"- 分支: `{ref_name}`\n"
@@ -98,41 +117,19 @@ def main() -> None:
         f"- Review 状态: `{args.review_status}`\n"
         f"- Auto-fix 状态: `{args.auto_fix_status}`\n"
         f"- Verdict: `{coordinator.get('verdict', 'unknown')}`\n"
-        f"- MCP 启用: `{audit.get('mcp_enabled', False)}`\n"
-        f"- MCP 来源: `{', '.join(audit.get('mcp_sources', [])) or 'none'}`\n"
-        f"- 上下文包大小: `{audit.get('context_bundle_size', 0)}`\n"
-        f"- 上下文降级: `{audit.get('degraded', False)}`\n"
-        f"- 风险等级: `{auto_fix.get('risk_level', 'unknown') or 'unknown'}`\n"
-        f"- 审查范围风险等级: `{auto_fix.get('review_scope', {}).get('risk_level', 'unknown') or 'unknown'}`\n"
-        f"- 允许自动修复: `{auto_fix.get('auto_fix_allowed', False)}`\n"
-        f"- 允许自动合并: `{auto_fix.get('auto_merge_allowed', False)}`\n"
-        f"- 合并状态: `{auto_fix.get('merge_status', 'not_requested') or 'not_requested'}`\n"
+        f"- 风险等级: `{risk_level or 'unknown'}`\n"
         f"- Workflow: {server_url}/{repo}/actions/runs/{run_id}\n"
         f"- Commit: {server_url}/{repo}/commit/{sha}\n\n"
-        "## 仓库上下文证据\n"
-        "### Related Files\n"
-        f"{related_file_lines}\n\n"
-        "### Related Issues\n"
-        f"{related_issue_lines}\n\n"
-        "### Related PRs\n"
-        f"{related_pr_lines}\n\n"
-        "### Recent Failed Runs\n"
-        f"{failed_run_lines}\n\n"
-        "### Degraded Reasons\n"
-        f"{degraded_lines}\n\n"
-        "## MCP 摘要\n"
-        f"{mcp_lines}\n\n"
-        "## 跳过文件\n"
-        f"{skipped_lines}\n\n"
-        "## 门禁摘要\n"
-        f"{gate_lines}\n\n"
+        "## 这个仓库是在干什么\n"
+        f"{purpose}\n\n"
+        "## 最值得注意的 1-3 个问题\n"
+        f"{finding_lines}\n\n"
+        "## 大白话建议\n"
+        f"{suggestion_lines}\n\n"
+        "## 它这次主要看了什么\n"
+        f"{_format_context_hint(audit)}\n\n"
         "## 自动修复结论\n"
-        f"- 原因: {auto_fix.get('reason', '') or 'unknown'}\n"
-        f"- 阻断原因: {auto_fix.get('blocked_reason', '') or 'none'}\n"
-        f"- 阻断 auto-fix 路径: {', '.join(auto_fix.get('blocked_auto_fix_paths', [])) or 'none'}\n"
-        f"- 阻断 auto-merge 路径: {', '.join(auto_fix.get('blocked_auto_merge_paths', [])) or 'none'}\n\n"
-        "## 审查报告\n"
-        f"{report}"
+        f"{_format_auto_fix(audit)}"
     )
 
     ensure_label("ai-review", "1d76db", "Automated AI push review result")
