@@ -15,6 +15,35 @@ from .github_api import ensure_label, upsert_review_issue
 REVIEW_ISSUE_TITLE = "AI Code Review Inbox"
 
 
+def _format_lines(items: list[str], default: str, limit: int = 12) -> str:
+    lines = [f"- {item}" for item in items[:limit] if str(item).strip()]
+    return "\n".join(lines) or default
+
+
+def _format_issue_refs(items: list[dict], default: str, limit: int = 8) -> str:
+    lines = []
+    for item in items[:limit]:
+        number = item.get("number", "?")
+        title = str(item.get("title", "")).strip() or "untitled"
+        state = str(item.get("state", "unknown")).strip()
+        updated_at = str(item.get("updated_at", "")).strip()
+        lines.append(f"- `#{number}` {title} (`{state}`{f', {updated_at}' if updated_at else ''})")
+    return "\n".join(lines) or default
+
+
+def _format_run_refs(items: list[dict], default: str, limit: int = 6) -> str:
+    lines = []
+    for item in items[:limit]:
+        name = str(item.get("name", "workflow")).strip()
+        conclusion = str(item.get("conclusion", "unknown")).strip()
+        branch = str(item.get("head_branch", "")).strip()
+        created_at = str(item.get("created_at", "")).strip()
+        detail = ", ".join(part for part in [branch, created_at] if part)
+        suffix = f" ({detail})" if detail else ""
+        lines.append(f"- `{name}` -> `{conclusion}`{suffix}")
+    return "\n".join(lines) or default
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report-file", required=True)
@@ -39,6 +68,11 @@ def main() -> None:
     validation_gates = audit.get("validation_gates", []) if isinstance(audit, dict) else []
     mcp_tool_calls = audit.get("mcp_tool_calls", []) if isinstance(audit, dict) else []
     skipped_files = audit.get("skipped_files", []) if isinstance(audit, dict) else []
+    related_files = audit.get("related_files", []) if isinstance(audit, dict) else []
+    related_issues = audit.get("related_issues", []) if isinstance(audit, dict) else []
+    related_prs = audit.get("related_prs", []) if isinstance(audit, dict) else []
+    recent_failed_runs = audit.get("recent_failed_runs", []) if isinstance(audit, dict) else []
+    degraded_reasons = audit.get("degraded_reasons", []) if isinstance(audit, dict) else []
 
     gate_lines = "\n".join(
         f"- `{gate.get('gate_name')}`: `{gate.get('status')}` (required={gate.get('required')})"
@@ -49,6 +83,11 @@ def main() -> None:
         for item in mcp_tool_calls[:20]
     ) or "- No MCP calls recorded."
     skipped_lines = "\n".join(f"- `{path}`" for path in skipped_files[:20]) or "- None"
+    related_file_lines = _format_lines([f"`{path}`" for path in related_files], "- None")
+    related_issue_lines = _format_issue_refs(related_issues, "- None")
+    related_pr_lines = _format_issue_refs(related_prs, "- None")
+    failed_run_lines = _format_run_refs(recent_failed_runs, "- None")
+    degraded_lines = _format_lines(degraded_reasons, "- None", limit=10)
 
     body = (
         "最新一次 push 审查结果如下。\n"
@@ -61,6 +100,8 @@ def main() -> None:
         f"- Verdict: `{coordinator.get('verdict', 'unknown')}`\n"
         f"- MCP 启用: `{audit.get('mcp_enabled', False)}`\n"
         f"- MCP 来源: `{', '.join(audit.get('mcp_sources', [])) or 'none'}`\n"
+        f"- 上下文包大小: `{audit.get('context_bundle_size', 0)}`\n"
+        f"- 上下文降级: `{audit.get('degraded', False)}`\n"
         f"- 风险等级: `{auto_fix.get('risk_level', 'unknown') or 'unknown'}`\n"
         f"- 审查范围风险等级: `{auto_fix.get('review_scope', {}).get('risk_level', 'unknown') or 'unknown'}`\n"
         f"- 允许自动修复: `{auto_fix.get('auto_fix_allowed', False)}`\n"
@@ -68,6 +109,17 @@ def main() -> None:
         f"- 合并状态: `{auto_fix.get('merge_status', 'not_requested') or 'not_requested'}`\n"
         f"- Workflow: {server_url}/{repo}/actions/runs/{run_id}\n"
         f"- Commit: {server_url}/{repo}/commit/{sha}\n\n"
+        "## 仓库上下文证据\n"
+        "### Related Files\n"
+        f"{related_file_lines}\n\n"
+        "### Related Issues\n"
+        f"{related_issue_lines}\n\n"
+        "### Related PRs\n"
+        f"{related_pr_lines}\n\n"
+        "### Recent Failed Runs\n"
+        f"{failed_run_lines}\n\n"
+        "### Degraded Reasons\n"
+        f"{degraded_lines}\n\n"
         "## MCP 摘要\n"
         f"{mcp_lines}\n\n"
         "## 跳过文件\n"
