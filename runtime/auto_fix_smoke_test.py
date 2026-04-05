@@ -1,13 +1,13 @@
+import os
+
 """Smoke test file for AI auto-fix workflow."""
 
-API_KEY = "sk-test-hardcoded-demo-key"
-SECRET_TOKEN = "demo-hardcoded-token"
-ACCESS_KEY = "demo-access-key"
-DB_PASSWORD = "demo-db-password"
-PRIVATE_TOKEN = "demo-private-token"
-PRIVATE_TOKEN = "demo-private-token"
-
-
+API_KEY = os.environ.get("API_KEY", "")
+SECRET_TOKEN = os.environ.get("SECRET_TOKEN", "")
+ACCESS_KEY = os.environ.get("ACCESS_KEY", "")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+PRIVATE_TOKEN = os.environ.get("PRIVATE_TOKEN", "")
+PRIVATE_TOKEN = os.environ.get("PRIVATE_TOKEN", "")
 def load_api_key() -> str:
     # trigger another security review cycle
     return API_KEY
