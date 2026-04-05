@@ -54,7 +54,7 @@ workflow 里会注入：
 
 ## Push Review Workflow
 
-[ai-code-review.yml](/e:/Develop/projects/ctp/.github/workflows/ai-code-review.yml) 的 job 顺序：
+[ai-code-review.yml](../.github/workflows/ai-code-review.yml) 的 job 顺序：
 
 1. `prepare-diff`
 2. `prepare-mcp-context`
@@ -66,7 +66,7 @@ workflow 里会注入：
 8. `auto-fix`
 9. `publish-review-issue`
 
-`prepare-mcp-context` 会生成 [review-context.json](/e:/Develop/projects/ctp/.ai/review-context.json) 这一类上下文包，内容包括：
+`prepare-mcp-context` 会生成 `review-context.json` 这一类上下文包，内容包括：
 
 - 原始 diff 元数据
 - changed files
@@ -95,7 +95,7 @@ workflow 里会注入：
 
 ## Repo Audit Workflow
 
-[ai-repo-audit.yml](/e:/Develop/projects/ctp/.github/workflows/ai-repo-audit.yml) 当前每天一次：
+[ai-repo-audit.yml](../.github/workflows/ai-repo-audit.yml) 当前每天一次：
 
 - cron: `0 0 * * *`
 
@@ -125,7 +125,7 @@ job 顺序：
 
 ## Repo-Local MCP Server
 
-仓库内 MCP server 在 [mcp_server.py](/e:/Develop/projects/ctp/tools/ai_review/mcp_server.py)。
+仓库内 MCP server 在 [mcp_server.py](../tools/ai_review/mcp_server.py)。
 
 当前暴露的核心工具：
 
@@ -146,7 +146,7 @@ job 顺序：
 - `get_commit_checks`
 - `get_recent_failed_runs`
 
-MCP client 在 [mcp_client.py](/e:/Develop/projects/ctp/tools/ai_review/mcp_client.py)，context orchestrator 在 [mcp_context.py](/e:/Develop/projects/ctp/tools/ai_review/mcp_context.py)。
+MCP client 在 [mcp_client.py](../tools/ai_review/mcp_client.py)，context orchestrator 在 [mcp_context.py](../tools/ai_review/mcp_context.py)。
 
 ## Auto-Fix
 
