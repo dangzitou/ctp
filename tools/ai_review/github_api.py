@@ -42,7 +42,7 @@ def _http_error_details(exc: urllib.error.HTTPError) -> GitHubApiError:
     elif body:
         parts.append(f"Response: {body}")
     if accepted:
-        parts.append(f"Required permissions: `{accepted}`.")
+        parts.append(f"Required permissions: `\`{accepted}\`\`.")
     if exc.code == 403 and api_message == "Resource not accessible by personal access token":
         parts.append(
             "The current token cannot create pull requests. "
@@ -143,10 +143,26 @@ def ensure_label(name: str, color: str, description: str) -> None:
             raise
 
 
+def _fetch_all_open_issues(url_template: str, per_page: int = 100) -> list:
+    """Fetch all open issues with pagination support."""
+    all_issues = []
+    page = 1
+    while True:
+        url = f"{url_template}&page={page}&per_page={per_page}"
+        issues = github_request("GET", url)
+        if not isinstance(issues, list) or not issues:
+            break
+        all_issues.extend(issues)
+        if len(issues) < per_page:
+            break
+        page += 1
+    return all_issues
+
+
 def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None:
     body = f"{ISSUE_MARKER}\n# {title}\n\n{body_content}"
-    issues_url = repo_api_url("/issues?state=open&per_page=100")
-    issues = github_request("GET", issues_url)
+    issues_url = repo_api_url("/issues?state=open")
+    issues = _fetch_all_open_issues(issues_url)
     if isinstance(issues, list):
         for issue in issues:
             current = issue.get("body", "")
@@ -159,8 +175,8 @@ def upsert_audit_issue(title: str, body_content: str, labels: list[str]) -> None
 
 def upsert_review_issue(title: str, body_content: str, labels: list[str]) -> None:
     body = f"{REVIEW_ISSUE_MARKER}\n# {title}\n\n{body_content}"
-    issues_url = repo_api_url("/issues?state=open&per_page=100")
-    issues = github_request("GET", issues_url)
+    issues_url = repo_api_url("/issues?state=open")
+    issues = _fetch_all_open_issues(issues_url)
     if isinstance(issues, list):
         for issue in issues:
             current = issue.get("body", "")
