@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -99,6 +100,14 @@ def run_command(command: list[str], cwd: Path | None = None, check: bool = True)
 
 def short_exc(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
+
+
+def render_timestamp_lines(label: str = "更新时间", dt: datetime | None = None) -> str:
+    moment = dt or datetime.now(timezone.utc)
+    utc_text = moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    beijing = timezone(timedelta(hours=8))
+    beijing_text = moment.astimezone(beijing).strftime("%Y-%m-%d %H:%M:%S UTC+08:00")
+    return f"- {label}（UTC）: `{utc_text}`\n- {label}（北京时间）: `{beijing_text}`"
 
 
 def main_cli_error(exc: BaseException) -> None:

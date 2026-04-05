@@ -7,7 +7,7 @@ import argparse
 import os
 from datetime import datetime, timezone
 
-from .common import ensure_parent, main_cli_error, read_json, short_exc, write_json, write_summary
+from .common import ensure_parent, main_cli_error, read_json, render_timestamp_lines, short_exc, write_json, write_summary
 from .github_api import ensure_label, upsert_audit_issue
 from .llm import model_for, request_markdown
 from .prompts import REVIEWER_SYSTEM, build_coordinate_prompt, build_reviewer_prompt
@@ -61,6 +61,35 @@ def reviewer(role: str, input_path: str, output_path: str, strict: bool, context
     return 1 if strict and not result.get("ok") else 0
 
 
+def _degraded_report(reviewer_results: list[dict], error: str | None = None) -> str:
+    findings = [
+        f"- [high] workflow - 巡查 coordinator 执行失败，错误为 `{error}`。"
+        if error
+        else "- [high] workflow - 所有巡查 agent 都失败了，本次没有产出可靠结论。"
+    ]
+    test_gaps = [
+        "- 修复 coordinator、MCP 上下文或模型调用异常后重新运行仓库巡查 workflow。"
+        if error
+        else "- 检查 MiniMax、MCP 上下文采集和 GitHub 权限后重新运行仓库巡查。"
+    ]
+    agents = [
+        f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
+        for item in reviewer_results
+    ] or ["- auditor: failed: no audit outputs found"]
+    summary = "巡查 coordinator 执行失败，当前仅提供降级结果。" if error else "定时巡查未能成功完成。"
+    return (
+        "## 总结\n"
+        f"{summary}\n\n"
+        "## 发现\n"
+        + "\n".join(findings)
+        + "\n\n## 测试缺口\n"
+        + "\n".join(test_gaps)
+        + "\n\n## Agent 明细\n"
+        + "\n".join(agents)
+        + "\n"
+    )
+
+
 def coordinate(input_path: str, outputs: list[str], strict: bool, report_output: str | None = None, context_path: str | None = None) -> int:
     payload = _load_payload(input_path, context_path)
     reviewer_results = [read_json(path) for path in outputs if os.path.exists(path)]
@@ -71,39 +100,23 @@ def coordinate(input_path: str, outputs: list[str], strict: bool, report_output:
         try:
             final_report = request_markdown(REVIEWER_SYSTEM, build_coordinate_prompt("audit", payload, reviewer_results), model)
         except Exception as exc:
-            final_report = (
-                "## 总结\n巡查 coordinator 执行失败，当前仅提供降级结果。\n"
-                "## 发现\n"
-                f"- [高] workflow - 巡查 coordinator 执行失败，错误为 `{short_exc(exc)}`。\n"
-                "## 测试缺口\n- 修复 coordinator 后重新运行仓库巡查 workflow。\n"
-                "## Agent 明细\n"
-                + "\n".join(
-                    f"- {item.get('role', 'unknown')}: {'ok' if item.get('ok') else 'failed: ' + item.get('error', 'unknown error')}"
-                    for item in reviewer_results
-                )
-            )
+            final_report = _degraded_report(reviewer_results, short_exc(exc))
             failed.append({"role": "coordinator", "ok": False, "error": short_exc(exc)})
     else:
-        final_report = (
-            "## 总结\n定时巡查未能成功完成。\n"
-            "## 发现\n- [高] workflow - 所有巡查 agent 都失败了。\n"
-            "## 测试缺口\n- 请检查 MiniMax、MCP 上下文采集和 GitHub 权限后重新运行巡查。\n"
-            "## Agent 明细\n"
-            + "\n".join(
-                f"- {item.get('role', 'unknown')}: failed: {item.get('error', 'unknown error')}"
-                for item in reviewer_results
-            )
-        )
+        final_report = _degraded_report(reviewer_results)
 
     if report_output:
         ensure_parent(report_output)
         with open(report_output, "w", encoding="utf-8") as handle:
             handle.write(final_report.rstrip() + "\n")
+
     if os.getenv("GITHUB_REPOSITORY") and os.getenv("GITHUB_TOKEN"):
         ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
         ensure_label("automation", "5319e7", "Automation-generated issue")
         ensure_label("triage", "d4c5f9", "Needs triage")
-        upsert_audit_issue(AUDIT_TITLE, final_report, ["ai-audit", "automation", "triage"])
+        audit_body = f"{render_timestamp_lines('巡查完成时间')}\n\n{final_report}"
+        upsert_audit_issue(AUDIT_TITLE, audit_body, ["ai-audit", "automation", "triage"])
+
     write_summary(f"## AI 仓库巡查\n\n巡查模型: `{model_for('AI_AUDIT_MODEL', DEFAULT_MODEL)}`\n\n{final_report}")
     print(final_report)
     return 1 if strict and failed else 0
