@@ -190,4 +190,11 @@ def enable_pull_request_auto_merge(pr_node_id: str, merge_method: str = "SQUASH"
       }
     }
     """
-    return github_graphql_request(query, {"pullRequestId": pr_node_id, "mergeMethod": merge_method})
+    data = github_graphql_request(query, {"pullRequestId": pr_node_id, "mergeMethod": merge_method})
+    mutation_result = data.get("enablePullRequestAutoMerge")
+    if not mutation_result:
+        raise RuntimeError("GitHub GraphQL enablePullRequestAutoMerge response missing data.")
+    pull_request = mutation_result.get("pullRequest")
+    if not pull_request:
+        raise RuntimeError("GitHub GraphQL enablePullRequestAutoMerge response missing pullRequest.")
+    return mutation_result
