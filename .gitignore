@@ -52,3 +52,5 @@ docker_ctp/redis-data/
 .env
 !.env.maclinux
 !.env.windows
+docker_ctp/.env.ha.local
+!docker_ctp/.env.ha.windows

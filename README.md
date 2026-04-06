@@ -115,6 +115,37 @@ cd ../seed
 python ctp_seed.py
 ```
 
+## Windows Docker 真数据启动
+
+如果你要在 Windows 上通过 Docker 直接看真实 CTP 行情，推荐走 HA 栈 + host relay：
+
+```powershell
+cd docker_ctp
+.\start-real.ps1
+```
+
+这个脚本会做两件事：
+
+1. 复制 Windows 专用 `docker_ctp/.env.ha.windows` 到 `docker_ctp/.env.ha.local`
+2. 在宿主机启动 `runtime\md_tts\md_server.py`，并让 Docker 中的 `seed` 容器通过 `host.docker.internal:19842` 接入真实 tick
+
+访问地址：
+
+- Dashboard: `http://localhost:18080`
+- Admin: `http://localhost:18081`
+
+如果你的 CTP 柜台需要账号、密码、AppID、AuthCode，请在启动前先设置环境变量，或写入 Redis 控制面：
+
+```powershell
+$env:CTP_FRONT="tcp://your-front:port"
+$env:CTP_BROKER_ID="your_broker"
+$env:CTP_USER_ID="your_user"
+$env:CTP_PASSWORD="your_password"
+$env:CTP_APP_ID="your_app_id"
+$env:CTP_AUTH_CODE="your_auth_code"
+.\start-real.ps1
+```
+
 ## 端口配置
 
 | 服务 | Mac/Linux | Windows | 说明 |
