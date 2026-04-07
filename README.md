@@ -146,6 +146,34 @@ $env:CTP_AUTH_CODE="your_auth_code"
 .\start-real.ps1
 ```
 
+## Docker 中用 AkShare 拉全合约
+
+如果你要在 Docker 里直接拉取当前全部可交易期货合约，并且希望 Mac/Linux 也能跑，推荐使用 `akshare` 模式：
+
+```bash
+cd docker_ctp
+cp .env.ha.akshare .env.ha.local
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
+```
+
+这个模式的特点：
+
+- `akshare` 在 `seed` 容器内部运行，不依赖 Windows DLL
+- 适合 Mac/Linux 直接部署
+- 会按品种抓取当前全部可交易合约，再推送到 Kafka / Redis / Dashboard
+
+默认参数在 `docker_ctp/.env.ha.akshare`：
+
+- `SEED_MODE=akshare`
+- `AKSHARE_REFRESH_SEC=30`
+- `AKSHARE_INCLUDE_CONTINUOUS=0`
+- `AKSHARE_SYMBOL_LIMIT=0`
+
+访问地址：
+
+- Dashboard: `http://localhost:18080`
+- Admin: `http://localhost:18081`
+
 ## 端口配置
 
 | 服务 | Mac/Linux | Windows | 说明 |

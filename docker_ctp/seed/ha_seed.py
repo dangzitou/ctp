@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import re
 import socket
 import threading
 import time
@@ -11,6 +12,11 @@ from socketserver import ThreadingMixIn
 
 import redis
 from kafka import KafkaProducer
+
+try:
+    import akshare as ak
+except ImportError:  # pragma: no cover - optional for non-akshare modes
+    ak = None
 
 
 INSTANCE_ID = os.getenv("INSTANCE_ID", str(uuid.uuid4())[:8])
@@ -24,6 +30,10 @@ HEARTBEAT_INTERVAL_SEC = float(os.getenv("HEARTBEAT_INTERVAL_SEC", "2"))
 MD_SERVER_HOST = os.getenv("MD_SERVER_HOST", "host.docker.internal")
 MD_SERVER_PORT = int(os.getenv("MD_SERVER_PORT", "19842"))
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "9101"))
+AKSHARE_REFRESH_SEC = float(os.getenv("AKSHARE_REFRESH_SEC", "30"))
+AKSHARE_INCLUDE_CONTINUOUS = os.getenv("AKSHARE_INCLUDE_CONTINUOUS", "0").strip().lower() in {"1", "true", "yes", "on"}
+AKSHARE_SYMBOL_LIMIT = int(os.getenv("AKSHARE_SYMBOL_LIMIT", "0"))
+AKSHARE_REQUEST_PAUSE_SEC = float(os.getenv("AKSHARE_REQUEST_PAUSE_SEC", "0.15"))
 
 INSTRUMENTS = {
     "cu2605": 95800.0,
@@ -93,6 +103,8 @@ class HaSeed:
             try:
                 if SEED_MODE == "tcp":
                     self._run_tcp_source()
+                elif SEED_MODE == "akshare":
+                    self._run_akshare_source()
                 else:
                     self._run_sim_source()
             except Exception as exc:
@@ -184,6 +196,94 @@ class HaSeed:
                     tick["source"] = f"seed:{INSTANCE_ID}"
                     tick["source_mode"] = "tcp"
                     self._publish(tick)
+
+    def _run_akshare_source(self):
+        if ak is None:
+            raise RuntimeError("akshare is not installed in the seed image")
+
+        symbol_df = ak.futures_symbol_mark()
+        symbols = symbol_df["symbol"].astype(str).tolist()
+        if AKSHARE_SYMBOL_LIMIT > 0:
+            symbols = symbols[:AKSHARE_SYMBOL_LIMIT]
+
+        published = 0
+        failures = 0
+        started_at = time.time()
+
+        for query_symbol in symbols:
+            if not self.running or not self._ensure_leadership():
+                return
+            try:
+                rows = ak.futures_zh_realtime(symbol=query_symbol)
+                for tick in self._normalize_akshare_rows(rows, query_symbol):
+                    self._publish(tick)
+                    published += 1
+            except Exception as exc:
+                failures += 1
+                state["last_error"] = f"{query_symbol}: {exc}"
+                print(f"[seed] akshare error for {query_symbol}: {exc}", flush=True)
+            if AKSHARE_REQUEST_PAUSE_SEC > 0:
+                time.sleep(AKSHARE_REQUEST_PAUSE_SEC)
+
+        elapsed = round(time.time() - started_at, 2)
+        print(
+            f"[seed] akshare cycle complete symbols={len(symbols)} published={published} failures={failures} elapsed={elapsed}s",
+            flush=True,
+        )
+        time.sleep(max(AKSHARE_REFRESH_SEC, 1.0))
+
+    def _normalize_akshare_rows(self, rows, query_symbol):
+        records = rows.to_dict("records")
+        trading_day = datetime.now().strftime("%Y-%m-%d")
+        emitted = []
+        for row in records:
+            instrument_id = str(row.get("symbol") or "").strip()
+            if not instrument_id:
+                continue
+            if not AKSHARE_INCLUDE_CONTINUOUS and re.fullmatch(r"[A-Za-z]+0", instrument_id):
+                continue
+            exchange = str(row.get("exchange") or "").strip().upper() or self._exchange(instrument_id)
+            trade = self._to_float(row.get("trade"))
+            bid = self._to_float(row.get("bidprice1"))
+            ask = self._to_float(row.get("askprice1"))
+            tick = {
+                "type": "tick",
+                "instrument_id": instrument_id,
+                "exchange": exchange,
+                "price": trade,
+                "bid": bid,
+                "ask": ask,
+                "volume": self._to_int(row.get("volume")),
+                "open_interest": self._to_int(row.get("position")),
+                "change": 0.0,
+                "change_pct": self._to_float(row.get("changepercent")) * 100 if self._to_float(row.get("changepercent")) else 0.0,
+                "timestamp": time.time(),
+                "update_time": f"{row.get('tradedate', trading_day)} {row.get('ticktime', datetime.now().strftime('%H:%M:%S'))}",
+                "trading_day": str(row.get("tradedate") or trading_day),
+                "query_symbol": query_symbol,
+                "source": f"seed:{INSTANCE_ID}",
+                "source_mode": "akshare",
+            }
+            emitted.append(tick)
+        return emitted
+
+    @staticmethod
+    def _to_float(value):
+        try:
+            if value in (None, "", "None"):
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _to_int(value):
+        try:
+            if value in (None, "", "None"):
+                return 0
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _exchange(instrument_id):
