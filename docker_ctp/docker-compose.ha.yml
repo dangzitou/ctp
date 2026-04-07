@@ -1,6 +1,7 @@
 services:
   kafka:
     image: apache/kafka:latest
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     environment:
       - KAFKA_PROCESS_ROLES=controller,broker
       - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
@@ -29,6 +30,7 @@ services:
 
   mysql:
     image: mysql:8.0
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     environment:
       - MYSQL_ROOT_PASSWORD=ctp123456
       - MYSQL_DATABASE=ctp_futures
@@ -49,6 +51,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     ports:
       - "${REDIS_HOST_PORT}:6379"
     volumes:
@@ -62,6 +65,7 @@ services:
       retries: 10
 
   seed:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     build:
       context: ./seed
       dockerfile: Dockerfile.ha
@@ -93,6 +97,7 @@ services:
       retries: 10
 
   worker:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     build:
       context: ./worker
     environment:
@@ -115,6 +120,7 @@ services:
       retries: 10
 
   admin:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     build:
       context: ./admin
     environment:
@@ -132,6 +138,7 @@ services:
       retries: 10
 
   dashboard:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     build:
       context: ./dashboard
     environment:
@@ -160,6 +167,7 @@ services:
 
   dashboard-lb:
     image: haproxy:2.9-alpine
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     depends_on:
       dashboard:
         condition: service_healthy
@@ -172,6 +180,7 @@ services:
 
   admin-lb:
     image: haproxy:2.9-alpine
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
     depends_on:
       admin:
         condition: service_healthy

@@ -5,7 +5,7 @@ This is the operator guide for using this repository on a Mac with Docker Deskto
 It covers:
 
 1. Starting the Dockerized Java dashboard and HA services
-2. Seeing market data from either simulation or a Windows real-data relay
+2. Seeing market data from either Docker-native AkShare mode or a Windows real-data relay
 3. Understanding the GitHub AI code-review and scheduled-audit workflows
 4. Switching market-data interfaces through Redis or environment variables
 
@@ -30,7 +30,33 @@ cd ctp
 
 ## 3. Choose Your Deployment Mode
 
-### Option A: Simulated data
+### Option A: AkShare full-contract mode
+
+Use this if you want a Docker-native setup that behaves consistently across Mac, Windows, and Linux.
+
+Pros:
+
+- no Windows dependency
+- no local Java, Kafka, Redis, or MySQL install needed
+- pulls currently tradable domestic futures contracts from inside the `seed` container
+- best default for cross-platform deployment
+
+Start it with:
+
+```bash
+cd docker_ctp
+cp .env.ha.akshare .env.ha.local
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
+```
+
+By default this mode sets:
+
+- `DOCKER_PLATFORM=linux/amd64`
+- `SEED_MODE=akshare`
+
+This is intentional so Docker Desktop on Intel Mac, Apple Silicon Mac, and Windows follows the same image platform.
+
+### Option B: Simulated data
 
 Use this first if you only need the system running quickly on a Mac.
 
@@ -40,7 +66,7 @@ Pros:
 - fully Dockerized
 - good for dashboard validation and workflow demos
 
-### Option B: Real data through a Windows relay
+### Option C: Real data through a Windows relay
 
 Use this when you need actual CTP data on the Mac.
 
@@ -94,7 +120,7 @@ On the Windows machine:
 
 ```powershell
 cd E:\Develop\projects\ctp
-python runtime\md_simnow\md_server.py 19842
+python runtime\md_tts\md_server.py --port 19842
 ```
 
 You should see output similar to:
@@ -296,11 +322,11 @@ If you go back to the office and want the fastest path on a Mac:
 
 1. Pull latest code
 2. Start Docker Desktop
-3. Run the HA stack in `sim` mode first
+3. Run the HA stack in `akshare` mode first
 4. Verify:
    - `http://localhost:18081`
    - `http://localhost:18080`
-5. If you need real data, point `SEED_MODE=tcp` to the Windows relay and restart
+5. If you need a Windows-host relay instead, point `SEED_MODE=tcp` to the Windows relay and restart
 6. If you need to switch CTP company fronts, update Redis `ctp_collect_url` and, if needed, `ctp_collect_auth`, then restart the affected process
 7. Push code normally; GitHub Actions will run review and audit automatically
 

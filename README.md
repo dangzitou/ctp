@@ -4,6 +4,22 @@
 
 **支持交易所:** SHFE | DCE | CZCE | CFFEX | INE (共 137+ 合约)
 
+## Quick Docs
+
+Recommended entrypoints:
+
+- Cross-platform Docker full-contract mode: `docker_ctp/.env.ha.akshare`
+- Windows Docker real-data relay: `docker_ctp/start-real.ps1`
+- HA deployment guide: `docs/HA_DEPLOYMENT.md`
+- Mac operator guide: `docs/MAC_DOCKER_DEPLOYMENT.md`
+- Market-data switching guide: `docs/DATA_INTERFACE_SWITCHING.md`
+
+Recommended startup choices:
+
+1. If you want the same Docker flow on Mac, Linux, and Windows, use `akshare` mode.
+2. If you need a Windows-host real-data relay, use `start-real.ps1`.
+3. If you are testing the HA stack first, start from `docs/HA_DEPLOYMENT.md`.
+
 ## 系统架构
 
 ```
@@ -160,10 +176,12 @@ docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
 
 - `akshare` 在 `seed` 容器内部运行，不依赖 Windows DLL
 - 适合 Mac/Linux 直接部署
+- 默认强制使用 `linux/amd64` 镜像平台，兼容 Intel Mac、Apple Silicon Mac、Windows Docker Desktop，以及常见 x86_64 Linux
 - 会按品种抓取当前全部可交易合约，再推送到 Kafka / Redis / Dashboard
 
 默认参数在 `docker_ctp/.env.ha.akshare`：
 
+- `DOCKER_PLATFORM=linux/amd64`
 - `SEED_MODE=akshare`
 - `AKSHARE_REFRESH_SEC=30`
 - `AKSHARE_INCLUDE_CONTINUOUS=0`
@@ -173,6 +191,8 @@ docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
 
 - Dashboard: `http://localhost:18080`
 - Admin: `http://localhost:18081`
+
+如果你在 ARM Linux 主机上运行，并且本机没有配置 `amd64` 仿真支持，可以把 `DOCKER_PLATFORM` 改成宿主机支持的平台后再测试；当前仓库优先保证 Docker Desktop 场景可直接启动。
 
 ## 端口配置
 

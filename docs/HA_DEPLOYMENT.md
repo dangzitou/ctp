@@ -36,11 +36,42 @@ This is the default and works cross-platform with Docker only.
 - `worker` consumes and materializes state
 - `dashboard` and `admin` expose the result
 
+### AkShare mode
+
+This is the recommended cross-platform market-data mode for Docker Desktop and standard x86_64 Linux hosts.
+
+- `seed` runs `akshare` inside the container
+- the container fetches currently tradable domestic futures contracts by symbol group
+- no Windows CTP DLL is required
+- the same flow can be used on Windows, macOS, and Linux
+
+Start it with:
+
+```bash
+cd docker_ctp
+cp .env.ha.akshare .env.ha.local
+docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
+```
+
+Important defaults in `docker_ctp/.env.ha.akshare`:
+
+- `DOCKER_PLATFORM=linux/amd64`
+- `SEED_MODE=akshare`
+- `AKSHARE_REFRESH_SEC=30`
+- `AKSHARE_INCLUDE_CONTINUOUS=0`
+- `AKSHARE_SYMBOL_LIMIT=0`
+
+Notes:
+
+- `linux/amd64` is forced by default to keep Docker Desktop behavior consistent across Intel Mac, Apple Silicon Mac, and Windows Docker Desktop
+- if you run on native ARM Linux without amd64 emulation, change `DOCKER_PLATFORM` to a supported platform and test locally
+- contract counts vary by trading session and upstream availability
+
 ### Real-data mode
 
 For real futures data on Mac/Linux, use a Windows relay:
 
-1. Run `runtime/md_simnow/md_server.py` on a Windows machine with the CTP API available.
+1. Run `runtime/md_tts/md_server.py` on a Windows machine with the TTS market-data API available.
 2. Point the Docker `seed` service at that relay with:
 
 ```env
