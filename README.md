@@ -149,6 +149,7 @@ cd docker_ctp
 
 - Dashboard: `http://localhost:18080`
 - Admin: `http://localhost:18081`
+- Kafka UI: `http://localhost:18082`
 
 如果你的 CTP 柜台需要账号、密码、AppID、AuthCode，请在启动前先设置环境变量，或写入 Redis 控制面：
 
@@ -191,6 +192,7 @@ docker compose -f docker-compose.ha.yml --env-file .env.ha.local up -d --build
 
 - Dashboard: `http://localhost:18080`
 - Admin: `http://localhost:18081`
+- Kafka UI: `http://localhost:18082`
 
 如果你在 ARM Linux 主机上运行，并且本机没有配置 `amd64` 仿真支持，可以把 `DOCKER_PLATFORM` 改成宿主机支持的平台后再测试；当前仓库优先保证 Docker Desktop 场景可直接启动。
 

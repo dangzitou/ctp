@@ -178,6 +178,21 @@ services:
     restart: unless-stopped
     networks: [ctp-ha]
 
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ctp-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    ports:
+      - "${KAFKA_UI_PORT}:8080"
+    restart: unless-stopped
+    networks: [ctp-ha]
+
   admin-lb:
     image: haproxy:2.9-alpine
     platform: ${DOCKER_PLATFORM:-linux/amd64}
