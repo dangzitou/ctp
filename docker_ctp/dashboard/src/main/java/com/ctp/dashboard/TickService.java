@@ -9,7 +9,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -121,6 +123,36 @@ public class TickService {
         } catch (Exception e) {
             log.warn("Redis kline write failed: {}", e.getMessage());
         }
+
+        // Persist the latest 1-minute candle so K-line history survives restarts.
+        try {
+            KlineCandle latest = candles.get(candles.size() - 1);
+            String sql = """
+                INSERT INTO klines_1min (instrument_id, trading_day, open_time, open_price, high_price, low_price, close_price, volume, open_interest)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    open_price = VALUES(open_price),
+                    high_price = VALUES(high_price),
+                    low_price = VALUES(low_price),
+                    close_price = VALUES(close_price),
+                    volume = VALUES(volume),
+                    open_interest = VALUES(open_interest)
+                """;
+            jdbcTemplate.update(
+                sql,
+                iid,
+                LocalDate.parse(tick.getTradingDay()),
+                Timestamp.from(Instant.ofEpochSecond(latest.openTime)),
+                latest.openPrice,
+                latest.highPrice,
+                latest.lowPrice,
+                latest.closePrice,
+                latest.volume,
+                tick.getOpenInterest()
+            );
+        } catch (Exception e) {
+            log.warn("MySQL kline persist failed for {}: {}", iid, e.getMessage());
+        }
     }
 
     public List<Tick> getAllInstruments() {
@@ -133,7 +165,53 @@ public class TickService {
 
     public List<KlineCandle> getKline(String instrumentId) {
         List<KlineCandle> candles = klineCache.get(instrumentId);
-        return candles != null ? candles : Collections.emptyList();
+        if (candles != null && !candles.isEmpty()) {
+            return candles;
+        }
+
+        try {
+            String redisPayload = (String) redisTemplate.opsForValue().get(REDIS_KEY_KLINE_PREFIX + instrumentId + ":1min");
+            if (redisPayload != null && !redisPayload.isBlank()) {
+                KlineCandle[] fromRedis = objectMapper.readValue(redisPayload, KlineCandle[].class);
+                List<KlineCandle> restored = new ArrayList<>(Arrays.asList(fromRedis));
+                if (!restored.isEmpty()) {
+                    klineCache.put(instrumentId, restored);
+                    return restored;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Redis kline read failed for {}: {}", instrumentId, e.getMessage());
+        }
+
+        try {
+            String sql = """
+                SELECT open_time, open_price, high_price, low_price, close_price, volume
+                FROM klines_1min
+                WHERE instrument_id = ?
+                ORDER BY open_time DESC
+                LIMIT 500
+                """;
+            List<KlineCandle> fromMySql = jdbcTemplate.query(sql, (rs, rowNum) -> {
+                KlineCandle candle = new KlineCandle();
+                candle.openTime = rs.getTimestamp("open_time").toInstant().getEpochSecond();
+                candle.openPrice = rs.getDouble("open_price");
+                candle.highPrice = rs.getDouble("high_price");
+                candle.lowPrice = rs.getDouble("low_price");
+                candle.closePrice = rs.getDouble("close_price");
+                candle.volume = rs.getLong("volume");
+                return candle;
+            }, instrumentId);
+
+            if (!fromMySql.isEmpty()) {
+                Collections.reverse(fromMySql);
+                klineCache.put(instrumentId, fromMySql);
+                return fromMySql;
+            }
+        } catch (Exception e) {
+            log.warn("MySQL kline read failed for {}: {}", instrumentId, e.getMessage());
+        }
+
+        return Collections.emptyList();
     }
 
     private void persistTickBatch() {
