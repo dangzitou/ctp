@@ -8,11 +8,11 @@ public class DashboardController {
 
     @GetMapping("/")
     public String index() {
-        return "redirect:/dashboard.html";
+        return "redirect:/dashboard";
     }
 
     @GetMapping("/dashboard")
     public String dashboard() {
-        return "forward:/static/dashboard.html";
+        return "redirect:/dashboard.html";
     }
 }

@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CTP K线看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        :root {
+            --bg: #07111f;
+            --bg-2: #0c1b30;
+            --panel: rgba(12, 27, 48, 0.88);
+            --card: rgba(18, 35, 60, 0.95);
+            --line: rgba(121, 151, 196, 0.18);
+            --text: #ecf3ff;
+            --muted: #8ea3c4;
+            --green: #27d17f;
+            --red: #ff6b7f;
+            --gold: #ffc857;
+            --blue: #55b6ff;
+        }
+        html, body { margin: 0; min-height: 100%; background:
+            radial-gradient(circle at top left, rgba(85,182,255,0.16), transparent 28%),
+            radial-gradient(circle at top right, rgba(255,200,87,0.12), transparent 22%),
+            linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
+            color: var(--text); font-family: "Segoe UI", "PingFang SC", sans-serif; }
+        body { padding: 18px; }
+        .shell { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: calc(100vh - 36px); }
+        .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; backdrop-filter: blur(10px); box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28); }
+        .sidebar { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+        .brand { display: flex; flex-direction: column; gap: 6px; }
+        .eyebrow { color: var(--gold); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; }
+        .title { font-size: 30px; font-weight: 700; line-height: 1.1; }
+        .subtitle { color: var(--muted); font-size: 13px; line-height: 1.6; }
+        .quick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .quick button, .toolbar button, .contract button {
+            border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.03); color: var(--text);
+            cursor: pointer; transition: 0.18s ease; font: inherit;
+        }
+        .quick button { padding: 12px 14px; text-align: left; }
+        .quick button:hover, .toolbar button:hover, .contract button:hover { transform: translateY(-1px); border-color: rgba(85,182,255,0.55); }
+        .quick button.active, .toolbar button.active, .contract button.active {
+            background: linear-gradient(135deg, rgba(85,182,255,0.24), rgba(255,200,87,0.18));
+            border-color: rgba(85,182,255,0.75);
+        }
+        .quick .name { display: block; font-weight: 700; font-size: 16px; }
+        .quick .meta { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+        .search { width: 100%; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(0,0,0,0.18); color: var(--text); font: inherit; }
+        .search::placeholder { color: #7590b5; }
+        .list { overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+        .contract { display: grid; gap: 8px; }
+        .contract button { padding: 12px 14px; text-align: left; }
+        .contract-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .contract-id { font-weight: 700; letter-spacing: 0.03em; }
+        .contract-ex { color: var(--muted); font-size: 12px; }
+        .contract-price { font-size: 18px; font-weight: 700; }
+        .up { color: var(--green); }
+        .down { color: var(--red); }
+        .content { padding: 18px; display: grid; grid-template-rows: auto auto 1fr; gap: 14px; }
+        .hero { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 18px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; }
+        .hero-main { display: flex; flex-direction: column; gap: 8px; }
+        .hero-tag { color: var(--gold); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; }
+        .hero-id { font-size: 42px; font-weight: 800; line-height: 1; }
+        .hero-price { font-size: 34px; font-weight: 700; }
+        .hero-change { font-size: 15px; font-weight: 600; }
+        .stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+        .stat { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
+        .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+        .stat-value { font-size: 18px; font-weight: 700; }
+        .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .periods { display: flex; gap: 8px; flex-wrap: wrap; }
+        .toolbar button { padding: 10px 14px; }
+        .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
+        .chart-card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 10px; min-height: 520px; }
+        #kline { width: 100%; height: 100%; min-height: 500px; }
+        @media (max-width: 1100px) {
+            .shell { grid-template-columns: 1fr; }
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 720px) {
+            body { padding: 10px; }
+            .hero { flex-direction: column; align-items: flex-start; }
+            .hero-id { font-size: 34px; }
+            .hero-price { font-size: 28px; }
+            .stats { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <aside class="panel sidebar">
+        <div class="brand">
+            <div class="eyebrow">Docker Market View</div>
+            <div class="title">CTP K线看板</div>
+            <div class="subtitle">直接查看 Docker 里的真实行情 K 线。默认优先展示沪铝和沪铜，也可以切到其它合约。</div>
+        </div>
+
+        <div class="quick">
+            <button type="button" data-symbol="AL2604" class="quick-pick active">
+                <span class="name">沪铝 AL2604</span>
+                <span class="meta">主看合约</span>
+            </button>
+            <button type="button" data-symbol="CU2605" class="quick-pick">
+                <span class="name">沪铜 CU2605</span>
+                <span class="meta">主看合约</span>
+            </button>
+        </div>
+
+        <input id="search" class="search" placeholder="搜索合约，例如 AL2604 / CU2605">
+
+        <div id="contract-list" class="list"></div>
+    </aside>
+
+    <main class="panel content">
+        <section class="hero">
+            <div class="hero-main">
+                <div class="hero-tag" id="exchange-tag">SHFE</div>
+                <div class="hero-id" id="symbol">AL2604</div>
+                <div class="hero-price up" id="last-price">--</div>
+                <div class="hero-change up" id="change-text">--</div>
+            </div>
+            <div class="meta">
+                <span id="status-text">正在加载</span>
+                <span id="updated-at">更新时间 --</span>
+                <span id="candle-range">区间 --</span>
+            </div>
+        </section>
+
+        <section class="stats">
+            <div class="stat"><div class="stat-label">成交量</div><div class="stat-value" id="volume">--</div></div>
+            <div class="stat"><div class="stat-label">持仓量</div><div class="stat-value" id="open-interest">--</div></div>
+            <div class="stat"><div class="stat-label">买一</div><div class="stat-value" id="bid">--</div></div>
+            <div class="stat"><div class="stat-label">卖一</div><div class="stat-value" id="ask">--</div></div>
+            <div class="stat"><div class="stat-label">K线数量</div><div class="stat-value" id="candle-count">--</div></div>
+        </section>
+
+        <section class="toolbar">
+            <div class="periods">
+                <button type="button" class="period active" data-period="1min">1M</button>
+                <button type="button" class="period" data-period="5min">5M</button>
+                <button type="button" class="period" data-period="15min">15M</button>
+                <button type="button" class="period" data-period="30min">30M</button>
+                <button type="button" class="period" data-period="1hour">1H</button>
+                <button type="button" class="period" data-period="1day">1D</button>
+            </div>
+            <div class="meta">
+                <span id="period-label">周期 1M</span>
+                <span id="source-text">数据源 /api/kline</span>
+            </div>
+        </section>
+
+        <section class="chart-card">
+            <div id="kline"></div>
+        </section>
+    </main>
+</div>
+
+<script>
+const API_BASE = location.origin;
+const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/ticks`;
+const PERIODS = {
+    '1min': 60,
+    '5min': 300,
+    '15min': 900,
+    '30min': 1800,
+    '1hour': 3600,
+    '1day': 86400
+};
+const PRIORITY_SYMBOLS = ['AL2604', 'CU2605', 'AL2605', 'CU2604'];
+const DEFAULT_INSTRUMENTS = [
+    { instrumentId: 'AL2604', exchange: 'SHFE', price: 0, change: 0, changePct: 0, volume: 0, openInterest: 0, bid: 0, ask: 0, updateTime: '' },
+    { instrumentId: 'CU2605', exchange: 'SHFE', price: 0, change: 0, changePct: 0, volume: 0, openInterest: 0, bid: 0, ask: 0, updateTime: '' }
+];
+
+let chart;
+let ws;
+let instruments = [];
+let rawKlines = {};
+let selectedSymbol = new URLSearchParams(location.search).get('symbol') || 'AL2604';
+let selectedPeriod = '1min';
+
+function fmtNumber(value, digits = 2) {
+    if (value === null || value === undefined || value === '') return '--';
+    return Number(value).toLocaleString('zh-CN', {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits
+    });
+}
+
+function fmtCompact(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
+    const num = Number(value);
+    if (Math.abs(num) >= 100000000) return `${(num / 100000000).toFixed(2)}亿`;
+    if (Math.abs(num) >= 10000) return `${(num / 10000).toFixed(2)}万`;
+    return num.toLocaleString('zh-CN');
+}
+
+function setStatus(text) {
+    document.getElementById('status-text').textContent = text;
+}
+
+function normalizeInstrument(item) {
+    return {
+        instrumentId: (item.instrumentId || item.instrument_id || '').toUpperCase(),
+        exchange: item.exchange || 'UNKNOWN',
+        price: Number(item.price ?? item.last_price ?? 0),
+        change: Number(item.change ?? 0),
+        changePct: Number(item.change_pct ?? item.changePct ?? 0),
+        volume: Number(item.volume ?? 0),
+        openInterest: Number(item.open_interest ?? item.openInterest ?? 0),
+        bid: Number(item.bid ?? item.bid_price1 ?? 0),
+        ask: Number(item.ask ?? item.ask_price1 ?? 0),
+        updateTime: item.update_time || item.updateTime || ''
+    };
+}
+
+function normalizeCandle(item) {
+    return {
+        timestamp: Number(item.timestamp),
+        open: Number(item.open),
+        high: Number(item.high),
+        low: Number(item.low),
+        close: Number(item.close),
+        volume: Number(item.volume ?? 0)
+    };
+}
+
+function aggregateCandles(candles, period) {
+    const step = PERIODS[period] || 60;
+    if (step === 60) return candles;
+    const buckets = new Map();
+    candles.forEach((candle) => {
+        const bucketTs = Math.floor(candle.timestamp / 1000 / step) * step * 1000;
+        const existing = buckets.get(bucketTs);
+        if (!existing) {
+            buckets.set(bucketTs, {
+                timestamp: bucketTs,
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close,
+                volume: candle.volume
+            });
+            return;
+        }
+        existing.high = Math.max(existing.high, candle.high);
+        existing.low = Math.min(existing.low, candle.low);
+        existing.close = candle.close;
+        existing.volume += candle.volume;
+    });
+    return [...buckets.values()].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function calcMA(candles, days) {
+    return candles.map((_, index) => {
+        if (index < days - 1) return [candles[index].timestamp, null];
+        const group = candles.slice(index - days + 1, index + 1);
+        const avg = group.reduce((sum, item) => sum + item.close, 0) / days;
+        return [candles[index].timestamp, avg];
+    });
+}
+
+function renderContractList() {
+    const keyword = document.getElementById('search').value.trim().toUpperCase();
+    const ranked = [...instruments].sort((a, b) => {
+        const aPriority = PRIORITY_SYMBOLS.includes(a.instrumentId) ? -1 : 0;
+        const bPriority = PRIORITY_SYMBOLS.includes(b.instrumentId) ? -1 : 0;
+        return aPriority - bPriority || a.instrumentId.localeCompare(b.instrumentId);
+    });
+    const filtered = ranked.filter((item) => !keyword || item.instrumentId.includes(keyword));
+    const list = document.getElementById('contract-list');
+    list.innerHTML = filtered.slice(0, 120).map((item) => {
+        const cls = item.change >= 0 ? 'up' : 'down';
+        const active = item.instrumentId === selectedSymbol ? 'active' : '';
+        return `
+            <div class="contract">
+                <button type="button" class="${active}" data-symbol="${item.instrumentId}">
+                    <div class="contract-top">
+                        <span class="contract-id">${item.instrumentId}</span>
+                        <span class="contract-ex">${item.exchange}</span>
+                    </div>
+                    <div class="contract-top">
+                        <span class="contract-price ${cls}">${item.price ? fmtNumber(item.price) : '--'}</span>
+                        <span class="${cls}">${item.changePct >= 0 ? '+' : ''}${fmtNumber(item.changePct)}%</span>
+                    </div>
+                </button>
+            </div>
+        `;
+    }).join('');
+    list.querySelectorAll('button[data-symbol]').forEach((button) => {
+        button.addEventListener('click', () => selectSymbol(button.dataset.symbol));
+    });
+}
+
+function updateQuickButtons() {
+    document.querySelectorAll('.quick-pick').forEach((button) => {
+        button.classList.toggle('active', button.dataset.symbol === selectedSymbol);
+    });
+}
+
+function updateHero(tick) {
+    const lastPrice = document.getElementById('last-price');
+    const changeText = document.getElementById('change-text');
+    const isUp = (tick.change ?? 0) >= 0;
+    lastPrice.textContent = fmtNumber(tick.price);
+    lastPrice.className = `hero-price ${isUp ? 'up' : 'down'}`;
+    changeText.textContent = `${isUp ? '+' : ''}${fmtNumber(tick.change)} / ${isUp ? '+' : ''}${fmtNumber(tick.changePct)}%`;
+    changeText.className = `hero-change ${isUp ? 'up' : 'down'}`;
+    document.getElementById('symbol').textContent = tick.instrumentId;
+    document.getElementById('exchange-tag').textContent = tick.exchange || 'UNKNOWN';
+    document.getElementById('volume').textContent = fmtCompact(tick.volume);
+    document.getElementById('open-interest').textContent = fmtCompact(tick.openInterest);
+    document.getElementById('bid').textContent = fmtNumber(tick.bid);
+    document.getElementById('ask').textContent = fmtNumber(tick.ask);
+    document.getElementById('updated-at').textContent = `更新时间 ${tick.updateTime || '--'}`;
+    renderContractList();
+}
+
+function updateHeroFromCandles(symbol, candles) {
+    if (!candles.length) return;
+    const last = candles[candles.length - 1];
+    const base = instruments.find((item) => item.instrumentId === symbol) || DEFAULT_INSTRUMENTS.find((item) => item.instrumentId === symbol) || {
+        instrumentId: symbol,
+        exchange: 'SHFE',
+        change: 0,
+        changePct: 0,
+        openInterest: 0,
+        bid: 0,
+        ask: 0,
+        updateTime: new Date(last.timestamp).toLocaleString('zh-CN', { hour12: false })
+    };
+    updateHero({
+        ...base,
+        instrumentId: symbol,
+        price: last.close,
+        volume: last.volume,
+        updateTime: base.updateTime || new Date(last.timestamp).toLocaleString('zh-CN', { hour12: false })
+    });
+}
+
+function renderChart() {
+    const source = rawKlines[selectedSymbol] || [];
+    const candles = aggregateCandles(source, selectedPeriod);
+    const candleData = candles.map((item) => [item.timestamp, item.open, item.close, item.low, item.high]);
+    const ma5 = calcMA(candles, 5);
+    const ma10 = calcMA(candles, 10);
+    chart.setOption({
+        xAxis: { type: 'time' },
+        series: [
+            { name: 'K线', type: 'candlestick', data: candleData },
+            { name: 'MA5', type: 'line', data: ma5, smooth: true, symbol: 'none' },
+            { name: 'MA10', type: 'line', data: ma10, smooth: true, symbol: 'none' }
+        ]
+    });
+    document.getElementById('period-label').textContent = `周期 ${document.querySelector('.period.active').textContent}`;
+    document.getElementById('candle-count').textContent = candles.length ? `${candles.length} 根` : '0 根';
+    if (candles.length) {
+        const start = new Date(candles[0].timestamp).toLocaleString('zh-CN', { hour12: false });
+        const end = new Date(candles[candles.length - 1].timestamp).toLocaleString('zh-CN', { hour12: false });
+        document.getElementById('candle-range').textContent = `区间 ${start} - ${end}`;
+    } else {
+        document.getElementById('candle-range').textContent = '区间 --';
+    }
+}
+
+async function loadKlines(symbol) {
+    setStatus(`正在拉取 ${symbol} K线`);
+    const response = await fetch(`${API_BASE}/api/kline/${symbol}`);
+    const data = await response.json();
+    rawKlines[symbol] = data.map(normalizeCandle).sort((a, b) => a.timestamp - b.timestamp);
+    if (symbol === selectedSymbol) {
+        updateHeroFromCandles(symbol, rawKlines[symbol]);
+    }
+    renderChart();
+    setStatus(`${symbol} K线已加载`);
+}
+
+async function loadTick(symbol) {
+    const response = await fetch(`${API_BASE}/api/tick/${symbol}`);
+    const data = await response.json();
+    if (!data || data.error) {
+        const fallback = instruments.find((item) => item.instrumentId === symbol);
+        if (fallback) updateHero(fallback);
+        return;
+    }
+    const normalized = normalizeInstrument(data);
+    const index = instruments.findIndex((item) => item.instrumentId === normalized.instrumentId);
+    if (index >= 0) {
+        instruments[index] = { ...instruments[index], ...normalized };
+    } else {
+        instruments.push(normalized);
+    }
+    updateHero(normalized);
+}
+
+async function loadInstruments() {
+    const response = await fetch(`${API_BASE}/api/instruments`);
+    const data = await response.json();
+    instruments = data.length ? data.map(normalizeInstrument) : [...DEFAULT_INSTRUMENTS];
+    if (!instruments.some((item) => item.instrumentId === selectedSymbol) && instruments.length) {
+        selectedSymbol = instruments[0].instrumentId;
+    }
+    renderContractList();
+    updateQuickButtons();
+}
+
+async function selectSymbol(symbol) {
+    selectedSymbol = symbol.toUpperCase();
+    const url = new URL(location.href);
+    url.searchParams.set('symbol', selectedSymbol);
+    history.replaceState({}, '', url);
+    updateQuickButtons();
+    renderContractList();
+    const cached = instruments.find((item) => item.instrumentId === selectedSymbol);
+    if (cached) updateHero(cached);
+    await Promise.all([loadTick(selectedSymbol), loadKlines(selectedSymbol)]);
+}
+
+function initChart() {
+    chart = echarts.init(document.getElementById('kline'));
+    chart.setOption({
+        backgroundColor: 'transparent',
+        animation: false,
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'cross' },
+            backgroundColor: 'rgba(7,17,31,0.96)',
+            borderColor: 'rgba(85,182,255,0.35)',
+            textStyle: { color: '#ecf3ff' }
+        },
+        legend: { top: 8, textStyle: { color: '#8ea3c4' } },
+        grid: { left: 20, right: 60, top: 50, bottom: 60, containLabel: true },
+        xAxis: {
+            type: 'time',
+            axisLine: { lineStyle: { color: 'rgba(121,151,196,0.2)' } },
+            axisLabel: { color: '#8ea3c4' },
+            splitLine: { show: false }
+        },
+        yAxis: {
+            scale: true,
+            position: 'right',
+            axisLine: { lineStyle: { color: 'rgba(121,151,196,0.2)' } },
+            axisLabel: { color: '#8ea3c4' },
+            splitLine: { lineStyle: { color: 'rgba(121,151,196,0.12)' } }
+        },
+        dataZoom: [
+            { type: 'inside', start: 0, end: 100 },
+            {
+                type: 'slider',
+                bottom: 12,
+                height: 18,
+                borderColor: 'rgba(121,151,196,0.15)',
+                backgroundColor: 'rgba(7,17,31,0.9)',
+                fillerColor: 'rgba(85,182,255,0.22)',
+                handleStyle: { color: '#55b6ff' },
+                textStyle: { color: '#8ea3c4' }
+            }
+        ],
+        series: [
+            {
+                name: 'K线',
+                type: 'candlestick',
+                data: [],
+                itemStyle: {
+                    color: '#27d17f',
+                    color0: '#ff6b7f',
+                    borderColor: '#27d17f',
+                    borderColor0: '#ff6b7f'
+                }
+            },
+            { name: 'MA5', type: 'line', data: [], lineStyle: { color: '#ffc857', width: 1.5 } },
+            { name: 'MA10', type: 'line', data: [], lineStyle: { color: '#55b6ff', width: 1.5 } }
+        ]
+    });
+    window.addEventListener('resize', () => chart.resize());
+}
+
+function connectWs() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => setStatus('实时推送已连接');
+    ws.onclose = () => {
+        setStatus('实时推送重连中');
+        setTimeout(connectWs, 3000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (event) => {
+        const tick = normalizeInstrument(JSON.parse(event.data));
+        const index = instruments.findIndex((item) => item.instrumentId === tick.instrumentId);
+        if (index >= 0) {
+            instruments[index] = { ...instruments[index], ...tick };
+        } else {
+            instruments.push(tick);
+        }
+        if (tick.instrumentId === selectedSymbol) {
+            updateHero(tick);
+        } else {
+            renderContractList();
+        }
+    };
+}
+
+document.getElementById('search').addEventListener('input', renderContractList);
+document.querySelectorAll('.quick-pick').forEach((button) => {
+    button.addEventListener('click', () => selectSymbol(button.dataset.symbol));
+});
+document.querySelectorAll('.period').forEach((button) => {
+    button.addEventListener('click', () => {
+        document.querySelectorAll('.period').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        selectedPeriod = button.dataset.period;
+        renderChart();
+    });
+});
+
+document.addEventListener('DOMContentLoaded', async () => {
+    initChart();
+    connectWs();
+    await loadInstruments();
+    await selectSymbol(selectedSymbol);
+    setInterval(() => loadInstruments().catch(() => {}), 10000);
+    setInterval(() => loadKlines(selectedSymbol).catch(() => {}), 15000);
+});
+</script>
+</body>
+</html>
