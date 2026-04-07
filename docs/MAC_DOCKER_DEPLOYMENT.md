@@ -17,7 +17,7 @@ It covers:
 
 Optional but recommended:
 
-- A separate Windows machine that can run `runtime/md_simnow/md_server.py` if you want real market data
+- A separate Windows machine that can run `runtime/md_tts/md_server.py` if you want real market data
 
 You do not need Java, Maven, Kafka, Redis, or MySQL installed locally on the Mac for the Docker path.
 
@@ -196,7 +196,7 @@ If you run the Windows relay and want it to obey the same Redis-controlled pool,
 
 ```powershell
 $env:REDIS_URL="redis://<mac-ip>:16380/0"
-python runtime\md_simnow\md_server.py 19842
+python runtime\md_tts\md_server.py 19842
 ```
 
 If you need an immediate one-off override, use:
