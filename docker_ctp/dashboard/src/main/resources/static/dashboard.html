@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CTP K线看板</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         :root {
@@ -26,9 +25,9 @@
             linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
             color: var(--text); font-family: "Segoe UI", "PingFang SC", sans-serif; }
         body { padding: 18px; }
-        .shell { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: calc(100vh - 36px); }
+        .shell { display: grid; grid-template-columns: 240px 1fr; gap: 16px; min-height: calc(100vh - 36px); }
         .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; backdrop-filter: blur(10px); box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28); }
-        .sidebar { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+        .sidebar { padding: 18px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 36px); overflow: hidden; }
         .brand { display: flex; flex-direction: column; gap: 6px; }
         .eyebrow { color: var(--gold); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; }
         .title { font-size: 30px; font-weight: 700; line-height: 1.1; }
@@ -48,7 +47,7 @@
         .quick .meta { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
         .search { width: 100%; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(0,0,0,0.18); color: var(--text); font: inherit; }
         .search::placeholder { color: #7590b5; }
-        .list { overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+        .list { overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; min-height: 0; }
         .contract { display: grid; gap: 8px; }
         .contract button { padding: 12px 14px; text-align: left; }
         .contract-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -74,6 +73,11 @@
         .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
         .chart-card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 10px; min-height: 520px; }
         #kline { width: 100%; height: 100%; min-height: 500px; }
+        .chart-wrap { width: 100%; height: 100%; min-height: 500px; display: flex; flex-direction: column; gap: 8px; }
+        .chart-svg { width: 100%; height: 440px; border-radius: 14px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)); }
+        .chart-axis { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+        .chart-empty { display: flex; align-items: center; justify-content: center; height: 440px; color: var(--muted); }
+        .chart-note { color: var(--gold); font-size: 12px; }
         @media (max-width: 1100px) {
             .shell { grid-template-columns: 1fr; }
             .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -151,7 +155,7 @@
         </section>
 
         <section class="chart-card">
-            <div id="kline"></div>
+            <div id="kline" class="chart-wrap"></div>
         </section>
     </main>
 </div>
@@ -167,17 +171,16 @@ const PERIODS = {
     '1hour': 3600,
     '1day': 86400
 };
-const PRIORITY_SYMBOLS = ['AL2604', 'CU2605', 'AL2605', 'CU2604'];
+const PRIORITY_SYMBOLS = ['AL2605', 'CU2605', 'CU2604', 'AL2604'];
 const DEFAULT_INSTRUMENTS = [
     { instrumentId: 'AL2604', exchange: 'SHFE', price: 0, change: 0, changePct: 0, volume: 0, openInterest: 0, bid: 0, ask: 0, updateTime: '' },
     { instrumentId: 'CU2605', exchange: 'SHFE', price: 0, change: 0, changePct: 0, volume: 0, openInterest: 0, bid: 0, ask: 0, updateTime: '' }
 ];
 
-let chart;
 let ws;
 let instruments = [];
 let rawKlines = {};
-let selectedSymbol = new URLSearchParams(location.search).get('symbol') || 'AL2604';
+let selectedSymbol = new URLSearchParams(location.search).get('symbol') || 'AL2605';
 let selectedPeriod = '1min';
 
 function fmtNumber(value, digits = 2) {
@@ -261,6 +264,15 @@ function calcMA(candles, days) {
     });
 }
 
+function escapeHtml(text) {
+    return String(text)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
 function renderContractList() {
     const keyword = document.getElementById('search').value.trim().toUpperCase();
     const ranked = [...instruments].sort((a, b) => {
@@ -342,17 +354,8 @@ function updateHeroFromCandles(symbol, candles) {
 function renderChart() {
     const source = rawKlines[selectedSymbol] || [];
     const candles = aggregateCandles(source, selectedPeriod);
-    const candleData = candles.map((item) => [item.timestamp, item.open, item.close, item.low, item.high]);
     const ma5 = calcMA(candles, 5);
     const ma10 = calcMA(candles, 10);
-    chart.setOption({
-        xAxis: { type: 'time' },
-        series: [
-            { name: 'K线', type: 'candlestick', data: candleData },
-            { name: 'MA5', type: 'line', data: ma5, smooth: true, symbol: 'none' },
-            { name: 'MA10', type: 'line', data: ma10, smooth: true, symbol: 'none' }
-        ]
-    });
     document.getElementById('period-label').textContent = `周期 ${document.querySelector('.period.active').textContent}`;
     document.getElementById('candle-count').textContent = candles.length ? `${candles.length} 根` : '0 根';
     if (candles.length) {
@@ -362,6 +365,105 @@ function renderChart() {
     } else {
         document.getElementById('candle-range').textContent = '区间 --';
     }
+
+    const container = document.getElementById('kline');
+    if (!candles.length) {
+        container.innerHTML = '<div class="chart-empty">当前合约还没有可渲染的 K 线数据</div>';
+        return;
+    }
+
+    const width = 1280;
+    const height = 440;
+    const padLeft = 54;
+    const padRight = 54;
+    const padTop = 20;
+    const padBottom = 36;
+    const innerWidth = width - padLeft - padRight;
+    const innerHeight = height - padTop - padBottom;
+    const prices = candles.flatMap((item) => [item.high, item.low, item.open, item.close]);
+    const rawMinPrice = Math.min(...prices);
+    const rawMaxPrice = Math.max(...prices);
+    const midPrice = (rawMinPrice + rawMaxPrice) / 2;
+    const observedSpan = Math.max(rawMaxPrice - rawMinPrice, 0);
+    const relativeFloor = Math.max(Math.abs(midPrice) * 0.0012, 1);
+    const countBoost = candles.length <= 2 ? 1.8 : candles.length <= 5 ? 1.35 : 1;
+    const targetSpan = Math.max(observedSpan * 1.35, relativeFloor * countBoost);
+    const padSpan = targetSpan * 0.18;
+    const minPrice = midPrice - (targetSpan / 2) - padSpan;
+    const maxPrice = midPrice + (targetSpan / 2) + padSpan;
+    const priceSpan = Math.max(maxPrice - minPrice, relativeFloor);
+    const candleWidth = candles.length <= 2
+        ? Math.min(80, innerWidth * 0.12)
+        : Math.max(8, Math.min(18, innerWidth / candles.length * 0.62));
+    const xFor = (index) => {
+        if (candles.length === 1) return padLeft + innerWidth / 2;
+        if (candles.length === 2) return index === 0 ? padLeft + innerWidth * 0.35 : padLeft + innerWidth * 0.65;
+        const stepX = innerWidth / candles.length;
+        return padLeft + stepX * index + stepX / 2;
+    };
+    const yFor = (price) => padTop + innerHeight - ((price - minPrice) / priceSpan) * innerHeight;
+
+    const gridLines = [];
+    for (let i = 0; i < 5; i += 1) {
+        const y = padTop + innerHeight * (i / 4);
+        const price = maxPrice - (priceSpan * i / 4);
+        gridLines.push(`
+            <line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}" stroke="rgba(121,151,196,0.12)" stroke-dasharray="4 6" />
+            <text x="${width - padRight + 8}" y="${y + 4}" fill="#8ea3c4" font-size="12">${price.toFixed(2)}</text>
+        `);
+    }
+
+    const candleShapes = candles.map((item, index) => {
+        const x = xFor(index);
+        const yHigh = yFor(item.high);
+        const yLow = yFor(item.low);
+        const yOpen = yFor(item.open);
+        const yClose = yFor(item.close);
+        const bodyTop = Math.min(yOpen, yClose);
+        const bodyHeight = Math.max(Math.abs(yOpen - yClose), candles.length <= 2 ? 10 : 2);
+        const color = item.close >= item.open ? '#27d17f' : '#ff6b7f';
+        const timeLabel = new Date(item.timestamp).toLocaleString('zh-CN', { hour12: false });
+        return `
+            <g>
+                <title>${escapeHtml(timeLabel)} O:${item.open} H:${item.high} L:${item.low} C:${item.close}</title>
+                <line x1="${x}" y1="${yHigh}" x2="${x}" y2="${yLow}" stroke="${color}" stroke-width="2" />
+                <rect x="${x - candleWidth / 2}" y="${bodyTop}" width="${candleWidth}" height="${bodyHeight}" fill="${color}" rx="2" />
+                <circle cx="${x}" cy="${yFor(item.close)}" r="${candles.length <= 2 ? 5 : 2.5}" fill="#ecf3ff" stroke="${color}" stroke-width="2" />
+                ${candles.length <= 2 ? `<text x="${x}" y="${Math.max(18, yFor(item.close) - 12)}" text-anchor="middle" fill="#ecf3ff" font-size="14">${item.close.toFixed(2)}</text>` : ''}
+            </g>
+        `;
+    }).join('');
+
+    const maLine = (data, color) => {
+        const points = data
+            .map((item, index) => item[1] == null ? null : `${xFor(index)},${yFor(item[1])}`)
+            .filter(Boolean)
+            .join(' ');
+        return points ? `<polyline fill="none" stroke="${color}" stroke-width="2" points="${points}" stroke-linejoin="round" stroke-linecap="round" />` : '';
+    };
+
+    const closeLinePoints = candles.map((item, index) => `${xFor(index)},${yFor(item.close)}`).join(' ');
+
+    const axisSource = candles.length <= 2
+        ? candles
+        : [candles[0], candles[Math.floor((candles.length - 1) / 2)], candles[candles.length - 1]];
+    const axisLabels = axisSource.filter(Boolean).map((item) =>
+        new Date(item.timestamp).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+    );
+
+    container.innerHTML = `
+        <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+            ${gridLines.join('')}
+            <polyline fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1.5" points="${closeLinePoints}" stroke-linejoin="round" stroke-linecap="round" />
+            ${candleShapes}
+            ${maLine(ma5, '#ffc857')}
+            ${maLine(ma10, '#55b6ff')}
+        </svg>
+        <div class="chart-axis">
+            ${axisLabels.map((label) => `<span>${escapeHtml(label)}</span>`).join('')}
+        </div>
+        ${candles.length < 6 ? `<div class="chart-note">当前只有 ${candles.length} 根 K 线，页面已放大显示；继续运行几分钟后图形会更明显。</div>` : ''}
+    `;
 }
 
 async function loadKlines(symbol) {
@@ -417,64 +519,7 @@ async function selectSymbol(symbol) {
     await Promise.all([loadTick(selectedSymbol), loadKlines(selectedSymbol)]);
 }
 
-function initChart() {
-    chart = echarts.init(document.getElementById('kline'));
-    chart.setOption({
-        backgroundColor: 'transparent',
-        animation: false,
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: { type: 'cross' },
-            backgroundColor: 'rgba(7,17,31,0.96)',
-            borderColor: 'rgba(85,182,255,0.35)',
-            textStyle: { color: '#ecf3ff' }
-        },
-        legend: { top: 8, textStyle: { color: '#8ea3c4' } },
-        grid: { left: 20, right: 60, top: 50, bottom: 60, containLabel: true },
-        xAxis: {
-            type: 'time',
-            axisLine: { lineStyle: { color: 'rgba(121,151,196,0.2)' } },
-            axisLabel: { color: '#8ea3c4' },
-            splitLine: { show: false }
-        },
-        yAxis: {
-            scale: true,
-            position: 'right',
-            axisLine: { lineStyle: { color: 'rgba(121,151,196,0.2)' } },
-            axisLabel: { color: '#8ea3c4' },
-            splitLine: { lineStyle: { color: 'rgba(121,151,196,0.12)' } }
-        },
-        dataZoom: [
-            { type: 'inside', start: 0, end: 100 },
-            {
-                type: 'slider',
-                bottom: 12,
-                height: 18,
-                borderColor: 'rgba(121,151,196,0.15)',
-                backgroundColor: 'rgba(7,17,31,0.9)',
-                fillerColor: 'rgba(85,182,255,0.22)',
-                handleStyle: { color: '#55b6ff' },
-                textStyle: { color: '#8ea3c4' }
-            }
-        ],
-        series: [
-            {
-                name: 'K线',
-                type: 'candlestick',
-                data: [],
-                itemStyle: {
-                    color: '#27d17f',
-                    color0: '#ff6b7f',
-                    borderColor: '#27d17f',
-                    borderColor0: '#ff6b7f'
-                }
-            },
-            { name: 'MA5', type: 'line', data: [], lineStyle: { color: '#ffc857', width: 1.5 } },
-            { name: 'MA10', type: 'line', data: [], lineStyle: { color: '#55b6ff', width: 1.5 } }
-        ]
-    });
-    window.addEventListener('resize', () => chart.resize());
-}
+function initChart() {}
 
 function connectWs() {
     ws = new WebSocket(WS_URL);
