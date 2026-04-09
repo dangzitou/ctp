@@ -81,6 +81,7 @@ def main() -> None:
     parser.add_argument("--review-status", required=True)
     parser.add_argument("--auto-fix-status", required=True)
     parser.add_argument("--audit-file")
+    parser.add_argument("--mode", choices=["review", "audit", "runtime"], default="review")
     args = parser.parse_args()
 
     report = Path(args.report_file).read_text(encoding="utf-8")
@@ -105,9 +106,25 @@ def main() -> None:
     finding_lines = "\n".join(f"- {item}" for item in findings) or "- 这轮没看到需要立刻处理的大问题。"
     suggestion_lines = "\n".join(f"- {item}" for item in suggestions) or "- 可以继续按现有方向推进，但建议结合真实数据流再做一次验证。"
 
+    header_map = {
+        "review": "最新一次 push 审查结果如下。",
+        "audit": "最新一次仓库巡检结果如下。",
+        "runtime": "最新一次运行态诊断结果如下。",
+    }
+    timestamp_map = {
+        "review": "Review completed",
+        "audit": "Audit completed",
+        "runtime": "Runtime debug completed",
+    }
+    mode_key_map = {
+        "review": "review",
+        "audit": "audit",
+        "runtime": "runtime",
+    }
+
     body = (
-        "最新一次 push 审查结果如下。\n\n"
-        f"{render_timestamp_lines('Review completed')}\n"
+        f"{header_map[args.mode]}\n\n"
+        f"{render_timestamp_lines(timestamp_map[args.mode])}\n"
         f"- 仓库: `{repo}`\n"
         f"- 分支: `{ref_name}`\n"
         f"- 提交: `{sha}`\n"
@@ -131,9 +148,17 @@ def main() -> None:
 
     ensure_label("ai-review", "1d76db", "Automated AI push review result")
     ensure_label("ai-audit", "0052cc", "Automated AI repository audit")
+    ensure_label("runtime-fix", "fb923c", "Runtime diagnostic or recovery change")
     ensure_label("automation", "5319e7", "Automation-generated issue or pull request")
     ensure_label("triage", "d4c5f9", "Needs triage")
-    upsert_center_issue_section("review", body, ["ai-review", "ai-audit", "automation", "triage"])
+    labels = ["automation", "triage"]
+    if args.mode == "review":
+        labels.insert(0, "ai-review")
+    else:
+        labels.insert(0, "ai-audit")
+    if args.mode == "runtime":
+        labels.append("runtime-fix")
+    upsert_center_issue_section(mode_key_map[args.mode], body, labels)
     close_legacy_ai_issues()
 
 

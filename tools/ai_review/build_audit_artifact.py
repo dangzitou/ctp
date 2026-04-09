@@ -199,6 +199,64 @@ def build_repo_audit(
     write_json(output_path, audit)
 
 
+def build_runtime_audit(
+    payload_path: str,
+    report_path: str,
+    output_path: str,
+    context_path: str | None = None,
+    fix_path: str | None = None,
+    validation_path: str | None = None,
+    pr_path: str | None = None,
+    runtime_validation_path: str | None = None,
+) -> None:
+    payload = read_json(payload_path)
+    report = _read_text_if_exists(report_path, "## 运行态概况\nruntime-debug 没有产出报告。\n")
+    context = _read_json_if_exists(context_path)
+    fix = _read_json_if_exists(fix_path)
+    validation = _read_json_if_exists(validation_path)
+    pr = _read_json_if_exists(pr_path)
+    runtime_validation = _read_json_if_exists(runtime_validation_path)
+    digest = _report_digest(report)
+
+    audit = {
+        "type": "runtime_debug",
+        "repository": os.getenv("GITHUB_REPOSITORY", payload.get("repository", "unknown")),
+        "branch": os.getenv("GITHUB_REF_NAME", "main") or "main",
+        "sha": payload.get("head_sha", ""),
+        "base_sha": payload.get("base_sha", ""),
+        "run_id": os.getenv("GITHUB_RUN_ID", ""),
+        "actor": os.getenv("GITHUB_ACTOR", ""),
+        "model": os.getenv("AI_AUDIT_MODEL", ""),
+        "included_files": payload.get("included_files", []),
+        "skipped_files": payload.get("skipped_files", []),
+        "skipped_count": payload.get("skipped_count", 0),
+        "runtime_summary": payload.get("runtime_summary", ""),
+        "runtime_validation": runtime_validation,
+        "reviewer_results": [],
+        "coordinator": digest,
+        "auto_fix": {
+            "changed": fix.get("changed", False),
+            "changed_files": fix.get("changed_files", [item.get("path") for item in fix.get("changes", []) if item.get("path")]),
+            "risk_level": validation.get("risk_level", fix.get("risk_level", "")),
+            "auto_fix_allowed": validation.get("auto_fix_allowed", fix.get("auto_fix_allowed")),
+            "auto_merge_allowed": validation.get("auto_merge_allowed", fix.get("auto_merge_allowed")),
+            "merge_status": pr.get("merge_status", "not_requested"),
+            "reason": validation.get("reason", fix.get("reason", "")),
+            "blocked_reason": fix.get("blocked_reason", ""),
+            "root_cause_guess": fix.get("root_cause_guess", ""),
+            "evidence_sources": fix.get("evidence_sources", []),
+            "blocked_auto_fix_paths": validation.get("blocked_auto_fix_paths", fix.get("blocked_auto_fix_paths", [])),
+            "blocked_auto_merge_paths": validation.get("blocked_auto_merge_paths", fix.get("blocked_auto_merge_paths", [])),
+            "gates": validation.get("gates", []),
+        },
+        "validation_gates": validation.get("gates", []),
+        "pr_result": pr,
+    }
+    audit.update(_context_fields(context))
+    ensure_parent(output_path)
+    write_json(output_path, audit)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -223,11 +281,23 @@ def main() -> None:
     audit.add_argument("--validation")
     audit.add_argument("--pr")
 
+    runtime = sub.add_parser("runtime")
+    runtime.add_argument("--payload", required=True)
+    runtime.add_argument("--report", required=True)
+    runtime.add_argument("--output", required=True)
+    runtime.add_argument("--context")
+    runtime.add_argument("--fix")
+    runtime.add_argument("--validation")
+    runtime.add_argument("--pr")
+    runtime.add_argument("--runtime-validation")
+
     args = parser.parse_args()
     if args.cmd == "review":
         build_review_audit(args.payload, args.reviews, args.report, args.output, args.fix, args.validation, args.pr, args.context)
-    else:
+    elif args.cmd == "audit":
         build_repo_audit(args.payload, args.reviews, args.report, args.output, args.context, args.fix, args.validation, args.pr)
+    else:
+        build_runtime_audit(args.payload, args.report, args.output, args.context, args.fix, args.validation, args.pr, args.runtime_validation)
 
 
 if __name__ == "__main__":

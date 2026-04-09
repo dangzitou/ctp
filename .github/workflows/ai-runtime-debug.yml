@@ -293,3 +293,73 @@ jobs:
           name: runtime-auto-fix-pr
           path: .ai/auto-fix-pr.json
           if-no-files-found: warn
+
+  publish-runtime-issue:
+    needs:
+      - runtime-debug
+      - prepare-mcp-context
+      - validate-auto-fix
+      - auto-fix
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip openai pyyaml uv
+      - uses: actions/download-artifact@v4
+        with:
+          path: .ai-artifacts
+      - name: Arrange runtime artifacts
+        shell: bash
+        run: |
+          mkdir -p .ai
+          cp .ai-artifacts/runtime-debug/runtime-debug-payload.json .ai/runtime-debug-payload.json
+          cp .ai-artifacts/runtime-debug/runtime-debug.json .ai/runtime-debug.json
+          cp .ai-artifacts/runtime-debug/runtime-debug.md .ai/runtime-debug.md
+          [ -f .ai-artifacts/runtime-debug/runtime-validation.json ] && cp .ai-artifacts/runtime-debug/runtime-validation.json .ai/runtime-validation.json || true
+          [ -f .ai-artifacts/runtime-debug-context/runtime-debug-context.json ] && cp .ai-artifacts/runtime-debug-context/runtime-debug-context.json .ai/runtime-debug-context.json || true
+          [ -f .ai-artifacts/runtime-auto-fix/auto-fix.json ] && cp .ai-artifacts/runtime-auto-fix/auto-fix.json .ai/auto-fix.json || true
+          [ -f .ai-artifacts/runtime-auto-fix/auto-fix-summary.md ] && cp .ai-artifacts/runtime-auto-fix/auto-fix-summary.md .ai/auto-fix-summary.md || true
+          [ -f .ai-artifacts/runtime-auto-fix/auto-fix-validation.json ] && cp .ai-artifacts/runtime-auto-fix/auto-fix-validation.json .ai/auto-fix-validation.json || true
+          [ -f .ai-artifacts/runtime-auto-fix-pr/auto-fix-pr.json ] && cp .ai-artifacts/runtime-auto-fix-pr/auto-fix-pr.json .ai/auto-fix-pr.json || true
+      - name: Create degraded runtime metadata when missing
+        shell: bash
+        run: |
+          [ -f .ai/runtime-debug-context.json ] || printf '{}\n' > .ai/runtime-debug-context.json
+          [ -f .ai/runtime-validation.json ] || printf '{"ok": false, "reason": "runtime validation missing", "gates": []}\n' > .ai/runtime-validation.json
+          [ -f .ai/auto-fix.json ] || printf '{"ok": false, "changed": false, "changed_files": [], "risk_level": "", "auto_fix_allowed": false, "auto_merge_allowed": false, "blocked_reason": "runtime auto-fix missing", "reason": "runtime auto-fix missing", "gates": []}\n' > .ai/auto-fix.json
+          [ -f .ai/auto-fix-validation.json ] || printf '{"ok": false, "risk_level": "", "auto_fix_allowed": false, "auto_merge_allowed": false, "reason": "runtime auto-fix validation missing", "gates": []}\n' > .ai/auto-fix-validation.json
+          [ -f .ai/auto-fix-pr.json ] || printf '{"ok": true, "pr_created": false, "pr_number": null, "pr_url": "", "compare_url": "", "merge_requested": false, "merge_status": "not_requested", "labels": ["automation", "triage", "runtime-fix"], "runtime_fix": true, "safe_to_automerge": false, "merge_reason": ""}\n' > .ai/auto-fix-pr.json
+      - name: Build structured runtime audit artifact
+        run: >
+          python -m tools.ai_review.build_audit_artifact runtime
+          --payload .ai/runtime-debug-payload.json
+          --context .ai/runtime-debug-context.json
+          --report .ai/runtime-debug.md
+          --fix .ai/auto-fix.json
+          --validation .ai/auto-fix-validation.json
+          --pr .ai/auto-fix-pr.json
+          --runtime-validation .ai/runtime-validation.json
+          --output .ai/runtime-audit.json
+      - name: Publish runtime issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python -m tools.ai_review.publish_review_issue
+          --mode runtime
+          --report-file .ai/runtime-debug.md
+          --review-status "${{ needs.runtime-debug.result }}"
+          --auto-fix-status "${{ needs.auto-fix.result }}"
+          --audit-file .ai/runtime-audit.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-audit
+          path: |
+            .ai/runtime-audit.json
+            .ai/runtime-debug-context.json
+            .ai/runtime-debug.md
+            .ai/runtime-validation.json
+          if-no-files-found: warn
