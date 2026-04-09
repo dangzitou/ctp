@@ -20,6 +20,16 @@ from .github_api import (
 )
 
 
+def _normalize_labels(values: list[str]) -> list[str]:
+    labels: list[str] = []
+    for value in values:
+        for item in str(value or "").split(","):
+            label = item.strip()
+            if label and label not in labels:
+                labels.append(label)
+    return labels
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--title", required=True)
@@ -28,9 +38,19 @@ def main() -> None:
     parser.add_argument("--base", required=True)
     parser.add_argument("--json-output")
     parser.add_argument("--merge-mode", choices=["none", "squash", "merge", "rebase"], default="none")
+    parser.add_argument("--labels", action="append", default=[])
+    parser.add_argument("--runtime-fix", action="store_true")
+    parser.add_argument("--safe-to-automerge", action="store_true")
+    parser.add_argument("--merge-reason", default="")
     args = parser.parse_args()
 
     body = Path(args.body_file).read_text(encoding="utf-8")
+    labels = ["automation", "triage", *_normalize_labels(args.labels)]
+    if args.runtime_fix and "runtime-fix" not in labels:
+        labels.append("runtime-fix")
+    if args.safe_to_automerge and "safe-to-automerge" not in labels:
+        labels.append("safe-to-automerge")
+
     result = {
         "ok": True,
         "pr_created": False,
@@ -39,12 +59,18 @@ def main() -> None:
         "compare_url": compare_url(args.base, args.head),
         "merge_requested": args.merge_mode != "none",
         "merge_status": "not_requested",
+        "labels": labels,
+        "runtime_fix": args.runtime_fix,
+        "safe_to_automerge": args.safe_to_automerge,
+        "merge_reason": args.merge_reason,
     }
 
     try:
         ensure_label("automation", "5319e7", "Automation-generated issue or pull request")
         ensure_label("triage", "d4c5f9", "Needs triage")
-        pr = upsert_pull_request(args.title, body, args.head, args.base, ["automation", "triage"])
+        ensure_label("runtime-fix", "fb923c", "Runtime diagnostic or recovery change")
+        ensure_label("safe-to-automerge", "16a34a", "Validated by automation and safe for auto-merge")
+        pr = upsert_pull_request(args.title, body, args.head, args.base, labels)
         pr_number = int(pr["number"])
         pr_html_url = str(pr.get("html_url") or pr_url(pr_number))
         result["pr_created"] = True
@@ -56,11 +82,13 @@ def main() -> None:
                 merge_result = merge_pull_request(pr_number, args.merge_mode)
                 result["merge_status"] = "merged" if merge_result.get("merged") else "merge_not_completed"
                 if result["merge_status"] == "merged":
+                    reason_line = f"\n- 自动合并依据: {args.merge_reason}" if args.merge_reason else ""
                     write_summary(
                         "## AI 自动修复自动合并\n\n"
                         f"PR #{pr_number} 已自动合并到 `{args.base}`。\n\n"
                         f"- PR: {pr_html_url}\n"
                         f"- 合并方式: `{args.merge_mode}`"
+                        f"{reason_line}"
                     )
             except GitHubApiError as exc:
                 if exc.code not in {405, 409, 422}:
@@ -70,11 +98,13 @@ def main() -> None:
                     raise
                 enable_pull_request_auto_merge(pr_node_id, args.merge_mode.upper())
                 result["merge_status"] = "auto_merge_enabled"
+                reason_line = f"\n- 自动合并依据: {args.merge_reason}" if args.merge_reason else ""
                 write_summary(
                     "## AI 自动修复自动合并\n\n"
                     f"已为 PR #{pr_number} 启用 GitHub auto-merge，等待条件满足后自动合并到 `{args.base}`。\n\n"
                     f"- PR: {pr_html_url}\n"
                     f"- 合并方式: `{args.merge_mode}`"
+                    f"{reason_line}"
                 )
 
         print(pr_html_url)
@@ -89,7 +119,11 @@ def main() -> None:
             "当前 GitHub Token 没有创建 Pull Request 的权限，已降级为保留自动修复分支并输出对比链接。\n\n"
             f"- 修复分支: `{args.head}`\n"
             f"- 目标分支: `{args.base}`\n"
-            f"- Compare 链接: {fallback_url}\n\n"
+            f"- Compare 链接: {fallback_url}\n"
+            f"- 标签: {', '.join(labels)}\n"
+            f"- Runtime fix: {'yes' if args.runtime_fix else 'no'}\n"
+            f"- Safe to automerge: {'yes' if args.safe_to_automerge else 'no'}\n"
+            f"- 自动合并依据: {args.merge_reason or 'n/a'}\n\n"
             "要让 workflow 自动创建 PR 或自动合并，请为当前令牌补齐 `pull_requests:write` 和 `contents:write` 权限，"
             "或在仓库 Secret 中配置具备该权限的 `AI_REVIEW_GH_TOKEN` 或 `AI_AUTOFIX_GITHUB_TOKEN`。\n\n"
             f"GitHub API 返回: HTTP {exc.code}\n\n```\n{exc}\n```"

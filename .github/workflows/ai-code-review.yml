@@ -325,6 +325,7 @@ jobs:
         run: >
           python -m tools.ai_review.validate_auto_fix run
           --fix .ai/auto-fix.json
+          --payload .ai/review-payload.json
           --output .ai/auto-fix-validation.json
       - name: Upload auto-fix artifacts
         if: always()
@@ -388,6 +389,44 @@ jobs:
             echo "changed=true"
             echo "fix_branch=$FIX_BRANCH"
           } >> "$GITHUB_OUTPUT"
+      - name: Prepare PR metadata
+        if: steps.prepare_fix_branch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          fix = json.loads(Path('.ai/auto-fix.json').read_text(encoding='utf-8'))
+          validation = json.loads(Path('.ai/auto-fix-validation.json').read_text(encoding='utf-8'))
+          safe = bool(validation.get('auto_merge_allowed'))
+          merge_reason = str(validation.get('reason') or '').strip() or 'Validation did not provide an explicit reason.'
+          gates = validation.get('gates') or []
+          lines = [
+              '## 自动修复上下文',
+              f"- 根因猜测: {fix.get('root_cause_guess') or 'n/a'}",
+              f"- 证据来源: {', '.join(fix.get('evidence_sources') or []) or 'n/a'}",
+              f"- 修改文件数: {len(fix.get('changed_files') or [])}",
+              '',
+              '## 验证门禁摘要',
+              f"- 风险等级: `{validation.get('risk_level', 'unknown')}`",
+              f"- 允许自动修复: `{validation.get('auto_fix_allowed', False)}`",
+              f"- 允许自动合并: `{safe}`",
+              f"- 判定依据: {merge_reason}",
+              '',
+              '## Gate 明细',
+          ]
+          if gates:
+              for gate in gates:
+                  lines.append(
+                      f"- `{gate.get('gate_name', 'unknown')}`: `{gate.get('status', 'unknown')}` | required=`{gate.get('required', False)}` | {gate.get('details', '')}"
+                  )
+          else:
+              lines.append('- 无 gate 输出。')
+          Path('.ai/safe-to-automerge.txt').write_text(('true' if safe else 'false') + '\n', encoding='utf-8')
+          Path('.ai/merge-reason.txt').write_text(merge_reason + '\n', encoding='utf-8')
+          Path('.ai/auto-fix-validation-summary.md').write_text('\n'.join(lines).rstrip() + '\n', encoding='utf-8')
+          PY
       - name: Build auto-fix PR body
         if: steps.prepare_fix_branch.outputs.changed == 'true'
         shell: bash
@@ -403,15 +442,14 @@ jobs:
             echo
             cat .ai/auto-fix-summary.md
             echo
-            echo "验证门禁摘要："
-            python -c "import json, pathlib; payload=json.loads(pathlib.Path('.ai/auto-fix-validation.json').read_text(encoding='utf-8')); print(f\"- 风险等级：`{payload.get('risk_level', 'unknown')}`\"); print(f\"- 允许自动合并：`{payload.get('auto_merge_allowed', False)}`\"); print(f\"- 原因：{payload.get('reason', '')}\")"
+            cat .ai/auto-fix-validation-summary.md
           } > .ai/auto-fix-pr-body.md
       - name: Decide merge mode
         if: steps.prepare_fix_branch.outputs.changed == 'true'
         id: decide_merge_mode
         shell: bash
         run: |
-          python -c "import json, pathlib; payload=json.loads(pathlib.Path('.ai/auto-fix-validation.json').read_text(encoding='utf-8')); pathlib.Path('.ai/merge-mode.txt').write_text(('squash' if payload.get('auto_merge_allowed') else 'none') + '\n', encoding='utf-8')"
+          python -c "from pathlib import Path; safe=Path('.ai/safe-to-automerge.txt').read_text(encoding='utf-8').strip().lower() == 'true'; Path('.ai/merge-mode.txt').write_text(('squash' if safe else 'none') + '\n', encoding='utf-8')"
           echo "merge_mode=$(cat .ai/merge-mode.txt)" >> "$GITHUB_OUTPUT"
       - name: Create auto-fix pull request
         if: steps.prepare_fix_branch.outputs.changed == 'true'
@@ -422,13 +460,19 @@ jobs:
         shell: bash
         run: |
           export GITHUB_TOKEN="${AI_REVIEW_GH_TOKEN:-${AUTO_FIX_GITHUB_TOKEN:-$GITHUB_TOKEN}}"
+          pr_args=()
+          if [ "$(cat .ai/safe-to-automerge.txt)" = "true" ]; then
+            pr_args+=(--safe-to-automerge)
+          fi
           python -m tools.ai_review.open_fix_pr \
             --title "chore(ai): 自动修复 ${GITHUB_REF_NAME} @ ${GITHUB_SHA}" \
             --body-file .ai/auto-fix-pr-body.md \
             --head "${{ steps.prepare_fix_branch.outputs.fix_branch }}" \
             --base "${{ github.ref_name }}" \
             --merge-mode "${{ steps.decide_merge_mode.outputs.merge_mode }}" \
-            --json-output .ai/auto-fix-pr.json
+            --merge-reason "$(cat .ai/merge-reason.txt)" \
+            --json-output .ai/auto-fix-pr.json \
+            "${pr_args[@]}"
       - name: Create degraded PR metadata when no branch was pushed
         if: always() && steps.prepare_fix_branch.outputs.changed != 'true'
         shell: bash
@@ -441,7 +485,11 @@ jobs:
             "pr_url": "",
             "compare_url": "",
             "merge_requested": false,
-            "merge_status": "not_requested"
+            "merge_status": "not_requested",
+            "labels": ["automation", "triage"],
+            "runtime_fix": false,
+            "safe_to_automerge": false,
+            "merge_reason": ""
           }
           JSON
       - if: always()

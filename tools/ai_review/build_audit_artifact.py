@@ -145,11 +145,23 @@ def build_review_audit(
     write_json(output_path, audit)
 
 
-def build_repo_audit(payload_path: str, reviews: list[str], report_path: str, output_path: str, context_path: str | None = None) -> None:
+def build_repo_audit(
+    payload_path: str,
+    reviews: list[str],
+    report_path: str,
+    output_path: str,
+    context_path: str | None = None,
+    fix_path: str | None = None,
+    validation_path: str | None = None,
+    pr_path: str | None = None,
+) -> None:
     payload = read_json(payload_path)
     report = _read_text_if_exists(report_path, "## 这个仓库是在干什么\naudit-coordinator 没有产出报告。\n")
     reviewer_results = [read_json(path) for path in reviews if os.path.exists(path)]
     context = _read_json_if_exists(context_path)
+    fix = _read_json_if_exists(fix_path)
+    validation = _read_json_if_exists(validation_path)
+    pr = _read_json_if_exists(pr_path)
     digest = _report_digest(report)
 
     audit = {
@@ -164,6 +176,23 @@ def build_repo_audit(payload_path: str, reviews: list[str], report_path: str, ou
         "included_files": payload.get("included_files", []),
         "reviewer_results": [{"role": item.get("role"), "ok": item.get("ok"), "error": item.get("error", "")} for item in reviewer_results],
         "coordinator": digest,
+        "auto_fix": {
+            "changed": fix.get("changed", False),
+            "changed_files": fix.get("changed_files", [item.get("path") for item in fix.get("changes", []) if item.get("path")]),
+            "risk_level": validation.get("risk_level", fix.get("risk_level", "")),
+            "auto_fix_allowed": validation.get("auto_fix_allowed", fix.get("auto_fix_allowed")),
+            "auto_merge_allowed": validation.get("auto_merge_allowed", fix.get("auto_merge_allowed")),
+            "merge_status": pr.get("merge_status", "not_requested"),
+            "reason": validation.get("reason", fix.get("reason", "")),
+            "blocked_reason": fix.get("blocked_reason", ""),
+            "root_cause_guess": fix.get("root_cause_guess", ""),
+            "evidence_sources": fix.get("evidence_sources", []),
+            "blocked_auto_fix_paths": validation.get("blocked_auto_fix_paths", fix.get("blocked_auto_fix_paths", [])),
+            "blocked_auto_merge_paths": validation.get("blocked_auto_merge_paths", fix.get("blocked_auto_merge_paths", [])),
+            "gates": validation.get("gates", []),
+        },
+        "validation_gates": validation.get("gates", []),
+        "pr_result": pr,
     }
     audit.update(_context_fields(context))
     ensure_parent(output_path)
@@ -190,12 +219,15 @@ def main() -> None:
     audit.add_argument("--report", required=True)
     audit.add_argument("--output", required=True)
     audit.add_argument("--context")
+    audit.add_argument("--fix")
+    audit.add_argument("--validation")
+    audit.add_argument("--pr")
 
     args = parser.parse_args()
     if args.cmd == "review":
         build_review_audit(args.payload, args.reviews, args.report, args.output, args.fix, args.validation, args.pr, args.context)
     else:
-        build_repo_audit(args.payload, args.reviews, args.report, args.output, args.context)
+        build_repo_audit(args.payload, args.reviews, args.report, args.output, args.context, args.fix, args.validation, args.pr)
 
 
 if __name__ == "__main__":

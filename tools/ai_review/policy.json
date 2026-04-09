@@ -34,7 +34,10 @@
       "gates": [
         "python_compile",
         "java_compile",
-        "docker_compose_config"
+        "docker_compose_config",
+        "docker_smoke",
+        "runtime_smoke",
+        "review_consensus"
       ]
     },
     {
@@ -58,9 +61,44 @@
       ]
     },
     {
+      "name": "ai-review-safe-tools",
+      "patterns": [
+        "tools/ai_review/*.py",
+        "tools/ai_review/**/*.py"
+      ],
+      "risk": "medium_risk",
+      "review_allowed": true,
+      "auto_fix_allowed": true,
+      "auto_merge_allowed": true,
+      "gates": [
+        "python_compile",
+        "git_diff_scope",
+        "review_consensus"
+      ]
+    },
+    {
+      "name": "dashboard-and-admin-safe-surfaces",
+      "patterns": [
+        "runtime/dashboard/app.py",
+        "docker_ctp/admin/**/*.py",
+        "docker_ctp/dashboard/src/main/java/com/ctp/dashboard/**/*.java"
+      ],
+      "risk": "medium_risk",
+      "review_allowed": true,
+      "auto_fix_allowed": true,
+      "auto_merge_allowed": true,
+      "gates": [
+        "python_compile",
+        "java_compile",
+        "git_diff_scope",
+        "docker_smoke",
+        "runtime_smoke",
+        "review_consensus"
+      ]
+    },
+    {
       "name": "application-code",
       "patterns": [
-        "tools/ai_review/**",
         "runtime/**/*.py",
         "docker_ctp/**/*.py",
         "docker_ctp/**/Dockerfile",
@@ -74,7 +112,9 @@
       "gates": [
         "python_compile",
         "java_compile",
-        "docker_compose_config"
+        "docker_compose_config",
+        "git_diff_scope",
+        "review_consensus"
       ]
     }
   ],
