@@ -63,7 +63,7 @@ ALL_KNOWN_INSTRUMENTS = [
     'hc2605','hc2606','hc2607','hc2608','hc2609','hc2610','hc2611','hc2612',
     'i2605','i2606','i2607','i2608','i2609','i2610','i2611','i2612',
     'j2605','j2606','j2607','j2608','j2609','j2610','j2611','j2612',
-    'jm2605','jm2606','jm2607','jm2608','jm2609','jm2610','jm2611','jm2612',
+    'jm2605','jm2606','jm2607','jm2608','jm2609','j2610','jm2611','jm2612',
     'cu2605','cu2606','cu2607','cu2608','cu2609','cu2610','cu2611','cu2612',
     'al2605','al2606','al2607','al2608','al2609','al2610','al2611','al2612',
     'zn2605','zn2606','zn2607','zn2608','zn2609','zn2610','zn2611','zn2612',
@@ -445,6 +445,23 @@ def api_kline(instrument_id, period):
 @app.route("/api/demo/status")
 def api_demo_status():
     return jsonify({"demo_mode": demo_mode})
+
+@app.route("/api/stats")
+def api_stats():
+    """Dashboard statistics endpoint for health checks."""
+    active_tickers = sum(1 for info in instruments.values() if info.get("last_price", 0) > 0)
+    total_volume = sum(info.get("volume", 0) for info in instruments.values())
+    demo_tickers = len(demo_generator.prices) if demo_generator else 0
+    return jsonify({
+        "status": "ok",
+        "demo_mode": demo_mode,
+        "active_tickers": active_tickers,
+        "total_instruments": len(instruments),
+        "total_volume": total_volume,
+        "connected_clients": len(connected_clients),
+        "demo_tickers": demo_tickers,
+        "timestamp": time.time(),
+    })
 
 
 # ============== SocketIO Events ==============
