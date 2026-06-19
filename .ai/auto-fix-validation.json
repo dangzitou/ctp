@@ -1,0 +1,59 @@
+{
+  "ok": false,
+  "changed_paths": [
+    "runtime/dashboard/app.py"
+  ],
+  "risk_level": "medium_risk",
+  "auto_fix_allowed": true,
+  "auto_merge_allowed": false,
+  "auto_merge_enabled": true,
+  "require_consensus_for_merge": true,
+  "blocked_auto_fix_paths": [],
+  "blocked_auto_merge_paths": [],
+  "gates": [
+    {
+      "gate_name": "python_compile",
+      "status": "passed",
+      "required": true,
+      "details": "Compiled 22 Python file(s).",
+      "artifact_path": ""
+    },
+    {
+      "gate_name": "java_compile",
+      "status": "skipped",
+      "required": false,
+      "details": "No Java files changed.",
+      "artifact_path": ""
+    },
+    {
+      "gate_name": "git_diff_scope",
+      "status": "passed",
+      "required": true,
+      "details": "git diff reports 27 changed line(s); 1 file(s), 27 line(s), limits=8 files/400 lines",
+      "artifact_path": ""
+    },
+    {
+      "gate_name": "docker_smoke",
+      "status": "failed",
+      "required": true,
+      "details": "compose config failed",
+      "artifact_path": "/home/runner/work/ctp-crawler/ctp-crawler/.ai/runtime-debug.json"
+    },
+    {
+      "gate_name": "runtime_smoke",
+      "status": "failed",
+      "required": true,
+      "details": "docker_smoke: compose config failed; service_health: seed:missing, worker:missing, dashboard:missing, admin:missing",
+      "artifact_path": "/home/runner/work/ctp-crawler/ctp-crawler/.ai/runtime-debug.json"
+    },
+    {
+      "gate_name": "review_consensus",
+      "status": "passed",
+      "required": true,
+      "details": "rationale references included files: runtime/dashboard/app.py; shared keywords: runtime/dashboard/app.py",
+      "artifact_path": ""
+    }
+  ],
+  "runtime_report": "/home/runner/work/ctp-crawler/ctp-crawler/.ai/runtime-debug.json",
+  "reason": "Required validation gate failed."
+}
