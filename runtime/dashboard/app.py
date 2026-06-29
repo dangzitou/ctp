@@ -130,6 +130,7 @@ def _init_all_instruments():
             }
 
 
+
 # Initialize all known instruments immediately at module load
 _init_all_instruments()
 
@@ -400,6 +401,7 @@ class MDServerClient:
             self.sock.close()
 
 
+
 md_client = None
 
 
@@ -465,11 +467,15 @@ def on_disconnect():
 start_md_client()
 
 if __name__ == "__main__":
+    # Use port 8080 to match docker-compose.ha.yml dashboard-lb expectations
+    # The HAProxy load balancer forwards external port 18080 to container port 8080
+    server_port = int(os.environ.get("DASHBOARD_PORT", 8080))
+    
     print("=" * 60)
     print("CTP Futures Dashboard Server")
     print("=" * 60)
     print(f"MDServer: {MD_SERVER_HOST}:{MD_SERVER_PORT}")
     print(f"Demo Mode: {demo_mode}")
-    print(f"Access: http://localhost:5000")
+    print(f"Access: http://localhost:{server_port}")
     print("=" * 60)
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
+    socketio.run(app, host="0.0.0.0", port=server_port, debug=False)
