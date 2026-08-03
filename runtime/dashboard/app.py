@@ -39,6 +39,9 @@ connected_clients = set()
 MD_SERVER_HOST = "127.0.0.1"
 MD_SERVER_PORT = 19842
 
+# Server port - configurable via environment variable, default 8080 for docker
+SERVER_PORT = int(os.environ.get("PORT", "8080"))
+
 
 def get_exchange(instrument_id):
     """Determine exchange from instrument ID."""
@@ -470,6 +473,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"MDServer: {MD_SERVER_HOST}:{MD_SERVER_PORT}")
     print(f"Demo Mode: {demo_mode}")
-    print(f"Access: http://localhost:5000")
+    print(f"Server Port: {SERVER_PORT}")
+    print(f"Access: http://localhost:{SERVER_PORT}")
     print("=" * 60)
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
+    socketio.run(app, host="0.0.0.0", port=SERVER_PORT, debug=False)
